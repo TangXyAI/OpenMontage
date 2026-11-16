@@ -98,10 +98,10 @@ install-gpu: bootstrap
 # ---- Testing ----
 
 test: ensure-venv
-	"$(RUN_PYTHON)" -m pytest tests/ -v
+	PATH="$$(cd "$$(dirname "$(RUN_PYTHON)")" && pwd -P):$$PATH" "$(RUN_PYTHON)" -m pytest tests/ -v
 
 test-contracts: ensure-venv
-	"$(RUN_PYTHON)" -m pytest tests/contracts/ -v
+	PATH="$$(cd "$$(dirname "$(RUN_PYTHON)")" && pwd -P):$$PATH" "$(RUN_PYTHON)" -m pytest tests/contracts/ -v
 
 # ---- Utilities ----
 

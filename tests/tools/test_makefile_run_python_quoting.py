@@ -75,3 +75,47 @@ def test_ensure_venv_succeeds_when_the_venv_path_contains_spaces(tmp_path):
     )
     assert "No such file or directory" not in proc.stderr
     assert "requires Python" not in proc.stdout
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make is not installed")
+@pytest.mark.parametrize("target, test_dir", [("test", "tests"), ("test-contracts", "tests/contracts")])
+def test_make_test_adds_selected_venv_to_subprocess_path(tmp_path, target, test_dir):
+    workdir = tmp_path / "project with spaces"
+    bindir = workdir / ".venv" / "bin"
+    bindir.mkdir(parents=True)
+    shutil.copy(MAKEFILE, workdir / "Makefile")
+    python = bindir / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    python.chmod(0o755)
+    tests = workdir / test_dir
+    tests.mkdir(parents=True)
+    (tests / "test_path.py").write_text(
+        "import os, shutil\n"
+        "def test_selected_python_is_on_path():\n"
+        f"    assert shutil.which('python') == {str(python)!r}\n"
+    )
+    env = {**os.environ, "VIRTUAL_ENV": str(workdir / ".venv"), "CONDA_PREFIX": ""}
+    result = subprocess.run(["make", target], cwd=workdir, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("make") is None, reason="make is not installed")
+def test_make_test_uses_absolute_venv_path_after_subprocess_chdir(tmp_path):
+    workdir = tmp_path / "project with spaces"
+    bindir = workdir / ".venv" / "bin"
+    bindir.mkdir(parents=True)
+    shutil.copy(MAKEFILE, workdir / "Makefile")
+    python = bindir / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    python.chmod(0o755)
+    tests = workdir / "tests"
+    tests.mkdir()
+    (tests / "test_path.py").write_text(
+        "import os, shutil\n"
+        "def test_selected_python_survives_chdir():\n"
+        "    os.chdir('/')\n"
+        f"    assert shutil.which('python') == {str(python)!r}\n"
+    )
+    env = {**os.environ, "VIRTUAL_ENV": "", "CONDA_PREFIX": ""}
+    result = subprocess.run(["make", "test"], cwd=workdir, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr

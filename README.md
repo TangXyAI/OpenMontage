@@ -179,6 +179,13 @@ And when a run is done, hit **▶ REPLAY RUN** — the whole production replays 
 - **Node.js** — a patched release on the 22.x (22.23.4+), 24.x (24.22.1+), or 26.x (26.12.1+) line; `.node-version` selects 22.23.4 — [nodejs.org](https://nodejs.org/)
 - **An AI coding assistant** — Claude Code, Cursor, Copilot, Windsurf, or Codex
 
+For the full test suite, use an FFmpeg build with the `drawtext` and `subtitles`
+filters and the `libvorbis` encoder. Check `ffmpeg -filters` and
+`ffmpeg -encoders`; some platform builds omit these optional components.
+Install the development dependencies with `make install-dev`, then use
+`make test`. The Makefile places the selected virtual environment's executable
+directory on `PATH` so subprocesses use the same environment.
+
 ### Install & Run
 
 ```bash
