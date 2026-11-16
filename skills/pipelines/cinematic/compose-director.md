@@ -1,5 +1,9 @@
 # Compose Director - Cinematic Pipeline
 
+For a narrative catalog, pass the explicit `project_dir` to `video_compose`.
+After changing any selected take, re-export the asset manifest, obtain the
+assets gate approval again, then create a new edit checkpoint before rendering.
+
 ## When To Use
 
 Render the cinematic piece with careful attention to grade, audio dynamics, and frame treatment. This is not a generic export step.

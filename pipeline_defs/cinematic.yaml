@@ -49,6 +49,14 @@ required_skills:
   - meta/checkpoint-protocol
   - meta/animation-runtime-selector
 
+production_modes:
+  - name: source_led
+    description: Source footage carries the story; generated inserts support it.
+  - name: narrative_generated
+    description: Character-led narrative in which generated shots may carry the story.
+    required_tools: [image_selector, video_selector]
+    agent_skills: [comfyui, minimax-h3]
+
 compatible_playbooks:
   recommended:
     - flat-motion-graphics
@@ -152,7 +160,7 @@ stages:
     human_approval_default: true
     review_focus:
       - Hero frames and reveal moments are defined
-      - Source-led scenes remain primary when source media exists
+      - Source-led scenes remain primary when source media exists and source-led treatment was approved
       - Transition and aspect-ratio choices support the mood
     success_criteria:
       - Schema-valid scene_plan artifact
@@ -199,7 +207,7 @@ stages:
       - Source selects and support assets are clearly separated
       - Motion-required beats use actual video clips rather than still-image substitutes
       - Music and ambience plan matches the beat map
-      - Optional generated inserts stay limited and justified
+      - Source-led inserts are justified; narrative-generated shots may carry the story
       - Explicit 3D worlds preserve one coherent scene graph across global, regional, and walk views
       - Hero 3D worlds use the production fidelity tier with licensed textured models and PBR terrain layers; primitive-only blockouts cannot pass
     success_criteria:

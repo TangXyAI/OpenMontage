@@ -14,6 +14,12 @@ This stage builds the beat map, selected lines, title-card copy, and reveal stru
 
 ## Process
 
+When the user supplies a script, preserve its dialogue, section IDs and timing
+unless the user approves changes. Validate it as the canonical `script` artifact
+and follow the normal proposal prerequisite and script approval checkpoint.
+For narrative productions, dialogue and acting may be central to the story;
+do not apply the trailer-oriented sparse-dialogue rule mechanically.
+
 ### 1. Build A Beat Map First
 
 Use a simple structure:

@@ -15,6 +15,14 @@ You are deciding how each cinematic beat will look and transition. This is where
 
 ## Process
 
+When a user supplies a scene plan, preserve scene IDs and content; validate it
+and request the normal scene-plan approval after the approved script stage.
+For `narrative_generated`, identify each shot's asset states and references,
+opening positions, eyelines, observable acting, camera, light and sound. Record
+only details relevant to that shot. Generated shots can carry the story when
+the approved proposal chooses this treatment. For `source_led`, source footage
+remains primary as described below; do not change existing projects' treatment.
+
 ### 1. Make Hero Frames Explicit
 
 Every cinematic piece needs a few memorable frames. Define them directly:

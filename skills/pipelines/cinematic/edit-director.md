@@ -16,6 +16,14 @@ This stage turns the beat map into a paced cinematic timeline. Rhythm and restra
 
 ### 1. Cut By Emotion First
 
+For productions using `NarrativeAssets`, call `edit_decisions(shot_ids,
+render_runtime)` with the approved shot order and the already-locked render
+runtime. It builds cuts from the explicitly selected takes and refuses missing
+selections or files. Review and adjust trims and pacing, validate the resulting
+edit decisions and write the normal edit checkpoint before composing. If a
+selection changes, renew the approved assets checkpoint and write a fresh edit
+checkpoint; pass the project root to compose as `project_dir`.
+
 Cuts should follow:
 
 - emotional emphasis,

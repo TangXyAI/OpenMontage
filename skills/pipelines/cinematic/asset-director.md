@@ -86,7 +86,43 @@ If that path fails, stop and ask before trying a different provider, model, or g
 
 ### 2. Generate Support Assets Only Where Needed
 
-Optional generated assets should fill clear gaps:
+#### Narrative productions with reusable visual assets
+
+When the approved brief calls for a character-led film, use the script and
+scene plan to identify recurring characters, locations and props before
+generating shots. Record each asset's description, approved reference image,
+and relevant states (for example costume, damage, or time of day) in the
+project's asset records. Keep the scene and shot links so later shots can reuse
+the correct state. Review representative poses, lighting and interactions
+before treating an identity as stable.
+
+For each shot, specify the opening frame, positions and eyelines, visible
+action, camera and lighting, using only the relevant approved assets. Generate
+and review candidate clips, recording the prompt, seed, model, workflow and
+change made for each iteration. Select a candidate explicitly for the edit;
+split an overcomplicated shot when repeated adjustments do not resolve it.
+Adapt the amount and format of prompt detail to the selected model rather than
+assuming a Seedance-specific prompt is suitable for MiniMax H3.
+
+If the approved path uses ComfyUI, `comfyui_image` may create the references
+and `comfyui_video` with `model_family: minimax_h3_local` may generate clips.
+The latter requires a locally installed H3 model stack and an API-format
+workflow with an output node. Use `workflow_bindings` to inject prompt, seed,
+and reference-image values into explicitly named nodes; unbound values remain
+unchanged. The configured ComfyUI server may be on another machine;
+do not describe the hosted H3 Partner Node as local inference. Read the
+ComfyUI and MiniMax H3 skills before generating.
+
+Persist reusable references and takes with `lib.narrative_assets.NarrativeAssets`.
+Use `put_asset` for each character, location or prop state; `link_assets`
+associates reference IDs with a scene. Use `add_take` for every candidate and
+record its prompt, seed, model, source tool and workflow provenance in metadata.
+After user review, `select_take` marks the selected take without deleting other
+versions. Export `asset_manifest()` to the canonical assets artifact and pass
+it through the usual validation and checkpoint process. The catalog is stored
+under the project artifacts directory and does not replace the checkpoint.
+
+For source-led projects, optional generated assets should fill clear gaps:
 
 - missing transitional b-roll,
 - concept-led inserts,
