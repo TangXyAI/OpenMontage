@@ -296,6 +296,9 @@ def _is_cacheable(tool: "BaseTool", inputs: dict[str, Any]) -> bool:
     """
     # A documented preflight must reach the tool's dry-run branch without
     # materializing an artifact or touching the cache's access metadata.
+    check = getattr(tool, "is_cacheable_request", None)
+    if check is not None and not check(inputs):
+        return False
     if inputs.get("dry_run") and "dry_run" in tool.input_schema.get("properties", {}):
         return False
     if not tool.idempotency_key_fields:

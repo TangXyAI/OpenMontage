@@ -565,15 +565,20 @@ class ComfyUIClient:
         t0 = time.perf_counter()
         prompt_id = resume_prompt_id or self.submit(workflow)
         t_submitted = time.perf_counter()
-        if resume_prompt_id:
-            # A prompt resumed by a new client instance was submitted with the
-            # original instance's client_id, so its websocket events are not
-            # guaranteed to reach this socket. Poll authoritative history.
-            entry = self.poll(prompt_id, timeout=timeout, interval=interval)
-        else:
-            entry = self._wait(
-                prompt_id, timeout=timeout, interval=interval, on_progress=on_progress
-            )
+        try:
+            if resume_prompt_id:
+                # Resume uses history because the original websocket client differs.
+                entry = self.poll(prompt_id, timeout=timeout, interval=interval)
+            else:
+                entry = self._wait(
+                    prompt_id, timeout=timeout, interval=interval, on_progress=on_progress
+                )
+        except ComfyUIError as exc:
+            if exc.prompt_id:
+                raise
+            raise ComfyUIError(str(exc), prompt_id=prompt_id) from exc
+        except Exception as exc:
+            raise ComfyUIError(f"Failed while waiting for prompt: {exc}", prompt_id=prompt_id) from exc
         t_polled = time.perf_counter()
 
         outputs = entry.get("outputs", {})
@@ -590,7 +595,7 @@ class ComfyUIClient:
         if not items:
             raise ComfyUIError(
                 f"No output artifacts on node {output_node}. "
-                f"Available nodes: {list(outputs.keys())}"
+                f"Available nodes: {list(outputs.keys())}", prompt_id=prompt_id
             )
 
         paths: list[Path] = []
@@ -600,12 +605,15 @@ class ComfyUIClient:
                 target = dest
             else:
                 target = dest.with_stem(f"{dest.stem}_{i:03d}").with_suffix(suffix)
-            self.download(
-                item["filename"],
-                item.get("subfolder", ""),
-                target,
-                item.get("type", "output"),
-            )
+            try:
+                self.download(
+                    item["filename"],
+                    item.get("subfolder", ""),
+                    target,
+                    item.get("type", "output"),
+                )
+            except Exception as exc:
+                raise ComfyUIError(f"Failed to download prompt output: {exc}", prompt_id=prompt_id) from exc
             paths.append(target)
         t_downloaded = time.perf_counter()
         exec_s = history_execution_seconds(entry)

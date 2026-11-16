@@ -172,3 +172,24 @@ def test_catalog_detects_stale_writers(tmp_path):
     with pytest.raises(RuntimeError, match="changed"):
         second.put_asset("b", "character", "B", "a.png")
     assert set(NarrativeAssets(tmp_path).data["assets"]) == {"a"}
+
+
+def test_catalog_rejects_reusing_a_take_file_for_another_version(tmp_path):
+    from lib.narrative_assets import NarrativeAssets
+    (tmp_path / "clip.mp4").write_bytes(b"video")
+    catalog = NarrativeAssets(tmp_path)
+    catalog.add_take("shot-1", "a", "clip.mp4", 1)
+    with pytest.raises(ValueError, match="already"):
+        catalog.add_take("shot-1", "b", "clip.mp4", 1)
+    assert set(catalog.data["shots"]["shot-1"]["takes"]) == {"a"}
+
+
+@pytest.mark.parametrize("tool_class", [ComfyUIImage, ComfyUIVideo])
+def test_custom_workflow_reports_requested_inputs_as_unbound(tool_class, tmp_path):
+    tool = tool_class()
+    tool._client.is_available = lambda: True
+    tool._client.generate = lambda workflow, output_node, dest, **kwargs: [Path(dest)]
+    result = tool.execute({"prompt": "requested", "seed": 5, "workflow_json": json.dumps({"9": {"inputs": {}}}), "output_node": "9", "output_path": str(tmp_path / "out.mp4")})
+    assert result.success, result.error
+    assert result.data["workflow_provenance"]["input_bindings"] == []
+    assert result.data["workflow_provenance"]["requested_parameters_applied"] is False

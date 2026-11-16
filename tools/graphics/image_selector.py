@@ -198,6 +198,9 @@ class ImageSelector(BaseTool):
                 ),
             },
             "workflow_bindings": {"type": "object", "description": "Explicit custom workflow input bindings."},
+            "resume_prompt_id": {"type": "string", "description": "Resume an existing ComfyUI prompt."},
+            "resume_context": {"type": "object", "description": "Original provenance for a resumed ComfyUI prompt."},
+            "timeout_seconds": {"type": "integer", "minimum": 1},
             "reference_image_path": {"type": "string", "description": "Local reference image for a bound custom workflow."},
             "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {

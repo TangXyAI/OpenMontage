@@ -142,3 +142,59 @@ def test_h3_preflight_does_not_infer_readiness_from_wan_or_server(comfy_server):
     modes = tool.get_info()["execution_modes"]
     assert modes["minimax_h3_local"]["readiness"] == "unknown"
     assert modes["minimax_h3_api"]["hosted"] is True
+
+
+@pytest.mark.parametrize("failure_stage", ["wait", "download"])
+def test_transport_failure_after_submit_retains_resume_context(comfy_server, tmp_path, monkeypatch, failure_stage):
+    import requests
+    from tools.video.comfyui_video import ComfyUIVideo
+
+    url, state = comfy_server
+    tool = ComfyUIVideo()
+    tool._client.server_url = url
+    if failure_stage == "wait":
+        monkeypatch.setattr(tool._client, "_wait", lambda *args, **kwargs: (_ for _ in ()).throw(requests.ReadTimeout("lost")))
+    else:
+        monkeypatch.setattr(tool._client, "_wait", lambda prompt_id, **kwargs: tool._client.poll(prompt_id, timeout=1, interval=0))
+        monkeypatch.setattr(tool._client, "download", lambda *args, **kwargs: (_ for _ in ()).throw(requests.ReadTimeout("lost")))
+    inputs = {"prompt": "run", "model_family": "minimax_h3_local", "workflow_json": json.dumps({"9": {"inputs": {}}}), "output_node": "9", "output_path": str(tmp_path / "out.mp4")}
+    result = tool.execute(inputs)
+    assert not result.success
+    assert result.data["prompt_id"] == "p1"
+    assert result.data["resume_context"]["workflow_provenance"]["workflow_hash_sha256"]
+    assert len(state["prompts"]) == 1
+
+
+def test_image_timeout_can_resume_without_reupload(comfy_server, tmp_path, monkeypatch):
+    from tools.graphics.comfyui_image import ComfyUIImage
+
+    url, state = comfy_server
+    tool = ComfyUIImage()
+    tool._client.server_url = url
+    monkeypatch.setattr(tool._client, "_wait", lambda prompt_id, **kwargs: (_ for _ in ()).throw(ComfyUIError("timeout", prompt_id=prompt_id)))
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"png")
+    inputs = {"prompt": "hero", "seed": 0, "workflow_json": json.dumps({"1": {"inputs": {"image": "old"}}, "9": {"inputs": {}}}), "output_node": "9", "output_path": str(tmp_path / "out.png"), "reference_image_path": str(ref), "workflow_bindings": {"reference_image_path": [{"node": "1", "input": "image"}]}}
+    first = tool.execute(inputs)
+    assert not first.success and first.data["prompt_id"] == "p1"
+    ref.unlink()
+    restored = tool.execute({**inputs, "resume_prompt_id": "p1", "resume_context": first.data["resume_context"]})
+    assert restored.success, restored.error
+    assert restored.seed == 0 and len(state["prompts"]) == 1 and state["uploads"] == 1
+
+
+def test_local_h3_rejects_hosted_partner_node(comfy_server, tmp_path):
+    from tools.video.comfyui_video import ComfyUIVideo
+    url, state = comfy_server
+    tool = ComfyUIVideo()
+    tool._client.server_url = url
+    graph = {"1": {"class_type": "MinimaxHailuo03TextToVideoNode", "inputs": {}}, "9": {"inputs": {}}}
+    result = tool.execute({"prompt": "run", "model_family": "minimax_h3_local", "workflow_json": json.dumps(graph), "output_node": "9", "output_path": str(tmp_path / "out.mp4")})
+    assert not result.success
+    assert not state["prompts"]
+
+
+def test_video_selector_exposes_resume_parameters():
+    from tools.video.video_selector import VideoSelector
+    properties = VideoSelector.input_schema["properties"]
+    assert {"resume_prompt_id", "resume_context", "timeout_seconds"} <= set(properties)

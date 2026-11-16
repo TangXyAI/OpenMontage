@@ -27,6 +27,7 @@ from tools._comfyui.client import ComfyUIClient, ComfyUIError
 from tools._comfyui.metadata import (
     BUNDLED_MODEL_STACKS,
     COMFYUI_SETUP_OFFER,
+    custom_input_provenance,
     missing_models_payload,
     model_stack,
     workflow_hash,
@@ -100,6 +101,9 @@ class ComfyUIImage(BaseTool):
                 "description": "Optional full ComfyUI workflow JSON. Requires output_node.",
             },
             "workflow_bindings": {"type": "object", "description": "Map input names to lists of {node, input} targets in a custom workflow."},
+            "resume_prompt_id": {"type": "string", "description": "Resume waiting for an existing ComfyUI prompt."},
+            "resume_context": {"type": "object", "description": "Original provenance returned with a timed-out prompt."},
+            "timeout_seconds": {"type": "integer", "minimum": 1},
             "reference_image_path": {"type": "string", "description": "Local image to upload for an explicitly bound custom workflow."},
             "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {
@@ -161,6 +165,12 @@ class ComfyUIImage(BaseTool):
         return info
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
+        resume_id = inputs.get("resume_prompt_id")
+        context = inputs.get("resume_context") or {}
+        if resume_id and context and context.get("prompt_id") != resume_id:
+            return ToolResult(success=False, error="resume_context prompt_id does not match resume_prompt_id")
+        if resume_id and context and inputs.get("output_node") and str(inputs["output_node"]) != context.get("output_node"):
+            return ToolResult(success=False, error="output_node does not match the original resume_context")
         custom_workflow = bool(inputs.get("workflow_json") or inputs.get("workflow_path"))
         if custom_workflow and not inputs.get("output_node"):
             return ToolResult(
@@ -177,7 +187,7 @@ class ComfyUIImage(BaseTool):
                 error=self._client.unavailable_reason(),
             )
 
-        if not custom_workflow:
+        if not custom_workflow and not resume_id:
             _, missing = self._client.check_models(_REQUIRED_MODELS)
             if missing:
                 return ToolResult(
@@ -195,7 +205,7 @@ class ComfyUIImage(BaseTool):
                 )
 
         start = time.time()
-        seed = inputs.get("seed") if inputs.get("seed") is not None else ComfyUIClient.random_seed()
+        seed = context.get("seed") if resume_id else (inputs.get("seed") if inputs.get("seed") is not None else ComfyUIClient.random_seed())
         width = inputs.get("width", 1024)
         height = inputs.get("height", 1024)
         steps = inputs.get("steps", 20)
@@ -203,7 +213,12 @@ class ComfyUIImage(BaseTool):
         output_path = Path(inputs.get("output_path", f"comfyui_image_{seed}.png"))
 
         try:
-            if custom_workflow:
+            if resume_id:
+                output_node = str(inputs.get("output_node") or context.get("output_node") or "")
+                if not output_node:
+                    raise ComfyUIError("Resuming an image requires the original output_node")
+                workflow = {}
+            elif custom_workflow:
                 workflow = self._load_custom_workflow(inputs)
                 workflow = self._client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
                 output_node = str(inputs["output_node"])
@@ -219,25 +234,32 @@ class ComfyUIImage(BaseTool):
                 })
                 output_node = "13"
 
-            provenance = self._workflow_provenance(
-                inputs, custom_workflow, output_node, workflow
-            )
+            provenance = (context.get("workflow_provenance") or {"source": "unknown_resumed_task", "prompt_id": resume_id, "output_node": output_node}
+                          if resume_id else self._workflow_provenance(inputs, custom_workflow, output_node, workflow))
+            extra = {"resume_prompt_id": resume_id} if resume_id else {}
             paths = self._client.generate(
-                workflow, output_node=output_node, dest=output_path, timeout=600,
+                workflow, output_node=output_node, dest=output_path, timeout=inputs.get("timeout_seconds", 600), **extra,
             )
 
         except ComfyUIError as exc:
-            return ToolResult(success=False, error=str(exc))
+            data = {"prompt_id": exc.prompt_id} if exc.prompt_id else {}
+            if exc.prompt_id and "provenance" in locals():
+                data["resume_context"] = context if resume_id else {
+                    "prompt_id": exc.prompt_id, "workflow_provenance": provenance,
+                    "seed": seed, "model": self._model_name(inputs, custom_workflow),
+                    "prompt": inputs.get("prompt"), "output_node": output_node,
+                }
+            return ToolResult(success=False, error=str(exc), data=data)
         except Exception as exc:
             return ToolResult(success=False, error=f"ComfyUI image generation failed: {exc}")
 
-        model_name = self._model_name(inputs, custom_workflow)
+        model_name = (context.get("model") or "unknown-resumed-task") if resume_id else self._model_name(inputs, custom_workflow)
         return ToolResult(
             success=True,
             data={
                 "provider": "comfyui",
                 "model": model_name,
-                "prompt": inputs["prompt"],
+                "prompt": context.get("prompt") if resume_id else inputs["prompt"],
                 "width": width,
                 "height": height,
                 "steps": steps,
@@ -287,6 +309,7 @@ class ComfyUIImage(BaseTool):
             }
         return {
             "source": "user_supplied",
+            **custom_input_provenance(inputs),
             "workflow_name": inputs.get("workflow_name"),
             "workflow_path": inputs.get("workflow_path"),
             "model": inputs.get("workflow_model") or inputs.get("model"),

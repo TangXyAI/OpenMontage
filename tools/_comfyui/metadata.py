@@ -7,6 +7,15 @@ import json
 from typing import Any
 
 
+def custom_input_provenance(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Distinguish requested values from values actually bound into a graph."""
+    bound = sorted((inputs.get("workflow_bindings") or {}).keys())
+    parameters = {"prompt", "seed", "width", "height", "steps", "guidance", "num_frames", "reference_image_path"}
+    requested = {key for key in parameters if inputs.get(key) is not None}
+    requested.update(f"reference_images.{key}" for key in (inputs.get("reference_images") or {}))
+    return {"input_bindings": bound, "requested_parameters_applied": requested.issubset(bound)}
+
+
 COMFYUI_SETUP_OFFER: dict[str, Any] = {
     "kind": "local_server",
     "fix_complexity": "1-minute env-var if ComfyUI is already running; otherwise local install",

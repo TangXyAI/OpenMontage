@@ -94,6 +94,82 @@ def test_direct_compose_rejects_stale_narrative_selection(tmp_path, monkeypatch)
     assert not result.success and "selection" in result.error.lower()
 
 
+def test_renamed_editorial_cut_cannot_use_unselected_take(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    catalog = setup_catalog(root)
+    manifest, edit = catalog.asset_manifest(), catalog.edit_decisions(["shot-1"], "ffmpeg")
+    edit["cuts"][0].update({"id": "cut-1", "source": str(root / "b.mp4")})
+    write_checkpoint(tmp_path, "project", "assets", "completed", {"asset_manifest": manifest}, human_approval_required=True, human_approved=True)
+    write_checkpoint(tmp_path, "project", "edit", "completed", {"edit_decisions": edit})
+    tool = VideoCompose()
+    monkeypatch.setattr(tool, "_compose", lambda inputs: ToolResult(success=True))
+    result = tool.execute({"operation": "compose", "project_dir": str(root), "edit_decisions": edit, "asset_manifest": manifest, "output_path": str(root / "out.mp4")})
+    assert not result.success
+
+
+def test_relative_selected_cut_resolves_to_project_not_cwd(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    catalog = setup_catalog(root)
+    (tmp_path / "a.mp4").write_bytes(b"other")
+    manifest, edit = catalog.asset_manifest(), catalog.edit_decisions(["shot-1"], "ffmpeg")
+    edit["cuts"][0]["source"] = "a.mp4"
+    write_checkpoint(tmp_path, "project", "assets", "completed", {"asset_manifest": manifest}, human_approval_required=True, human_approved=True)
+    write_checkpoint(tmp_path, "project", "edit", "completed", {"edit_decisions": edit})
+    tool = VideoCompose()
+    captured = []
+    monkeypatch.setattr(tool, "_pre_compose_validation", lambda *args: None)
+    monkeypatch.setattr(tool, "_render_via_ffmpeg", lambda **kwargs: captured.extend(kwargs["resolved_cuts"]) or ToolResult(success=True))
+    monkeypatch.chdir(tmp_path)
+    result = tool.execute({"operation": "render", "project_dir": str(root), "edit_decisions": edit, "asset_manifest": manifest, "output_path": str(root / "out.mp4")})
+    assert result.success, result.error
+    assert Path(captured[0]["source"]) == root / "a.mp4"
+
+
+def test_relative_selected_cut_renders_project_media_not_cwd(tmp_path, monkeypatch):
+    import subprocess
+    root = tmp_path / "project"
+    catalog = setup_catalog(root)
+    for color, path in (("blue", root / "a.mp4"), ("red", tmp_path / "a.mp4")):
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color={color}:s=64x64:r=30:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)], check=True)
+    manifest, edit = catalog.asset_manifest(), catalog.edit_decisions(["shot-1"], "ffmpeg")
+    edit["cuts"][0]["source"] = "a.mp4"
+    edit["renderer_family"] = "cinematic-trailer"
+    edit["metadata"]["compose_target"] = {"width": 64, "height": 64}
+    write_checkpoint(tmp_path, "project", "assets", "completed", {"asset_manifest": manifest}, human_approval_required=True, human_approved=True)
+    write_checkpoint(tmp_path, "project", "edit", "completed", {"edit_decisions": edit})
+    monkeypatch.chdir(tmp_path)
+    output = root / "out.mp4"
+    result = VideoCompose().execute({"operation": "render", "project_dir": str(root), "edit_decisions": edit, "asset_manifest": manifest, "output_path": str(output)})
+    assert result.success, result.error
+    frame = subprocess.check_output(["ffmpeg", "-loglevel", "error", "-ss", "0.3", "-i", str(output), "-frames:v", "1", "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
+    assert frame[2] > frame[0]
+
+
+def test_cache_cannot_bypass_selection_approval_after_reselection(tmp_path, monkeypatch):
+    from lib.asset_cache import reset_default_asset_cache
+    root = tmp_path / "project"
+    catalog = setup_catalog(root)
+    manifest, edit = catalog.asset_manifest(), catalog.edit_decisions(["shot-1"], "ffmpeg")
+    write_checkpoint(tmp_path, "project", "assets", "completed", {"asset_manifest": manifest}, human_approval_required=True, human_approved=True)
+    write_checkpoint(tmp_path, "project", "edit", "completed", {"edit_decisions": edit})
+    monkeypatch.setenv("OPENMONTAGE_ASSET_CACHE", "1")
+    monkeypatch.setenv("OPENMONTAGE_ASSET_CACHE_DIR", str(tmp_path / "cache"))
+    reset_default_asset_cache()
+    tool = VideoCompose()
+    monkeypatch.setattr(tool, "_pre_compose_validation", lambda *args: None)
+    def render(**kwargs):
+        output = kwargs["output_path"]
+        output.write_bytes(b"render")
+        return ToolResult(success=True, artifacts=[str(output)])
+    monkeypatch.setattr(tool, "_render_via_ffmpeg", render)
+    inputs = {"operation": "render", "project_dir": str(root), "edit_decisions": edit, "asset_manifest": manifest, "output_path": str(root / "out.mp4")}
+    assert tool.execute(inputs).success
+    catalog.select_take("shot-1", "b")
+    result = tool.execute(inputs)
+    assert not result.success
+    reset_default_asset_cache()
+
+
 def test_two_shot_pipeline_with_fake_comfyui(tmp_path, monkeypatch, comfy_server):
     import json
     import subprocess

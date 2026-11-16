@@ -248,7 +248,7 @@ class VideoCompose(BaseTool):
     # the video, the cached result data, or whether a gate (strict,
     # skip_contrast) runs. output_path and remotion_timeout_ms do neither.
     idempotency_key_fields = [
-        "operation", "input_path", "edit_decisions", "composition_data",
+        "operation", "input_path", "project_dir", "edit_decisions", "composition_data",
         "asset_manifest", "audio_path", "subtitle_path", "subtitle_style",
         "overlays", "codec", "crf", "preset", "profile", "output_profile",
         "options", "proposal_packet", "script_path", "script_text",
@@ -261,6 +261,13 @@ class VideoCompose(BaseTool):
     user_visible_verification = [
         "Play the composed output and verify cuts, subtitles, and overlays",
     ]
+
+    def is_cacheable_request(self, inputs: dict[str, Any]) -> bool:
+        """Narrative renders must validate live approval before every run."""
+        edit = inputs.get("edit_decisions") or {}
+        if not isinstance(edit, dict) or not isinstance(edit.get("metadata", {}), dict):
+            return False
+        return edit.get("metadata", {}).get("narrative_selection") is None
 
     def _remotion_available(self) -> bool:
         """Check if Remotion rendering is available (requires npx + composer project + node_modules)."""
@@ -374,6 +381,20 @@ class VideoCompose(BaseTool):
                 validation = self._validate_narrative_selection(inputs)
                 if validation is not None:
                     return validation
+                edit = inputs.get("edit_decisions") or {}
+                if edit.get("metadata", {}).get("narrative_selection") is not None:
+                    root = Path(inputs["project_dir"]).resolve()
+                    lookup = {asset["id"]: asset["path"] for asset in (inputs.get("asset_manifest") or {}).get("assets", [])}
+                    normalized = []
+                    for cut in edit.get("cuts", []):
+                        item = dict(cut)
+                        source = lookup.get(item.get("source"), item.get("source", ""))
+                        path = (root / source).resolve()
+                        if not path.is_relative_to(root) or not path.is_file():
+                            return ToolResult(success=False, error=f"Narrative cut source is missing or outside project: {source}")
+                        item["source"] = str(path)
+                        normalized.append(item)
+                    inputs = {**inputs, "edit_decisions": {**edit, "cuts": normalized}}
             if operation == "compose":
                 result = self._compose(inputs)
             elif operation == "render":
@@ -425,13 +446,21 @@ class VideoCompose(BaseTool):
                     or edit_selection.get(shot_id) != take_id):
                 return ToolResult(success=False, error=f"Narrative selection changed for {shot_id}; renew asset approval and edit")
         lookup = {asset["id"]: asset["path"] for asset in (inputs.get("asset_manifest") or {}).get("assets", [])}
+        candidates = {}
+        for shot_id, shot in catalog.data.get("shots", {}).items():
+            for take_id, take in shot.get("takes", {}).items():
+                path = (project_root / take["path"]).resolve()
+                candidates.setdefault(path, set()).add((shot_id, take_id))
         for cut in edit.get("cuts", []):
             shot_id = cut.get("id")
+            source = lookup.get(cut.get("source"), cut.get("source", ""))
+            actual = (project_root / source).resolve()
+            owners = candidates.get(actual, set())
+            if owners and not any(selection.get(owner) == take for owner, take in owners):
+                return ToolResult(success=False, error=f"Cut source is not an approved narrative selection: {source}")
             if shot_id not in selection:
                 continue
             expected = (project_root / catalog.data["shots"][shot_id]["takes"][selection[shot_id]]["path"]).resolve()
-            source = lookup.get(cut.get("source"), cut.get("source", ""))
-            actual = (project_root / source).resolve()
             if actual != expected or not actual.is_file() or not actual.is_relative_to(project_root):
                 return ToolResult(success=False, error=f"Cut source does not match narrative selection for {shot_id}")
         return None

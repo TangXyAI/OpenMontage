@@ -71,6 +71,8 @@ class NarrativeAssets:
         if not shot_id or not take_id or duration_seconds <= 0:
             raise ValueError("Take needs shot id, take id and positive duration")
         media = self._media(path)
+        if any(take.get("path") == media for shot in self.data["shots"].values() for take in shot.get("takes", {}).values()):
+            raise ValueError(f"Take file is already registered: {media}")
         shot = self.data["shots"].setdefault(shot_id, {"takes": {}, "selected": None})
         if take_id in shot["takes"]:
             raise ValueError(f"Take already exists: {take_id}")

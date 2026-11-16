@@ -39,6 +39,9 @@ then write the canonical artifact and checkpoint. Pass `project_dir` to
 selection requires a new approved assets checkpoint and a new edit checkpoint.
 The catalog is single-writer: a stale instance must be reloaded before saving;
 concurrent writers get an error rather than silently overwriting each other.
+Use a unique file path for every take and do not overwrite files already
+registered in the catalog. A process crash can leave `narrative_assets.lock`;
+after confirming no writer is active, remove that file before retrying.
 
 ## Remote ComfyUI
 
@@ -48,10 +51,18 @@ that machine. A custom workflow is not automatically rewritten: use explicit
 `workflow_bindings` as described in the ComfyUI skill, including a binding for
 the local reference image when an image-conditioned graph supports one. The
 image is uploaded to the remote server. MiniMax H3 local requires its own model
-stack and workflow; ComfyUI Partner Nodes are hosted services.
+stack and workflow; ComfyUI Partner Nodes are hosted services. Local H3 mode
+rejects known hosted partner nodes, but arbitrary third-party nodes must be
+inspected separately before claiming an entirely offline workflow.
 
-If a video job times out, save `result.data["prompt_id"]` and
-`result.data["resume_context"]`. Call `comfyui_video` again with these as
+For a custom graph, `workflow_provenance.input_bindings` records which requested
+parameters were actually injected; `requested_parameters_applied` is false
+when a supplied prompt, seed, dimensions, or reference was not bound. The
+historical top-level prompt/seed describe the request and are not proof that
+an unbound graph used them.
+
+If an image or video job times out, save `result.data["prompt_id"]` and
+`result.data["resume_context"]`. Call the same ComfyUI tool again with these as
 `resume_prompt_id` and `resume_context`; the existing job is polled without
 another upload or submission. Without the original context, resumed task
 provenance is explicitly unknown. Provider availability alone does not confirm

@@ -30,6 +30,7 @@ from tools._comfyui.client import ComfyUIClient, ComfyUIError
 from tools._comfyui.metadata import (
     BUNDLED_MODEL_STACKS,
     COMFYUI_SETUP_OFFER,
+    custom_input_provenance,
     missing_models_payload,
     model_stack,
     workflow_hash,
@@ -519,6 +520,11 @@ class ComfyUIVideo(BaseTool):
                 workflow = {}
             elif custom_workflow:
                 workflow = self._load_custom_workflow(inputs)
+                if model_family == "minimax_h3_local" and any(
+                    node.get("class_type") in set(partner_nodes.values())
+                    for node in workflow.values() if isinstance(node, dict)
+                ):
+                    raise ComfyUIError("Local MiniMax H3 workflow contains a hosted ComfyUI Partner Node")
                 workflow = self._client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
                 output_node = str(inputs["output_node"])
             elif model_family in partner_nodes:
@@ -810,6 +816,7 @@ class ComfyUIVideo(BaseTool):
         local_h3 = model_family == "minimax_h3_local"
         return {
             "source": "user_supplied",
+            **custom_input_provenance(inputs),
             "workflow_name": inputs.get("workflow_name"),
             "workflow_path": inputs.get("workflow_path"),
             "model": inputs.get("workflow_model") or inputs.get("model"),

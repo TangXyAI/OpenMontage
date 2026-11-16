@@ -279,6 +279,8 @@ class VideoSelector(BaseTool):
             "workflow_bindings": {"type": "object", "description": "Explicit custom workflow input bindings."},
             "model_family": {"type": "string", "description": "Backend workflow family, such as minimax_h3_local for ComfyUI."},
             "resume_context": {"type": "object", "description": "Original provenance returned with a timed-out prompt."},
+            "resume_prompt_id": {"type": "string", "description": "Resume an existing ComfyUI prompt."},
+            "timeout_seconds": {"type": "integer", "minimum": 1},
             "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {
                 "type": "string",

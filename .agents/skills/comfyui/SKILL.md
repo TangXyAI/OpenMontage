@@ -100,7 +100,8 @@ image inputs. Use only graphs that actually support the intended references.
 - If a long render times out locally, check ComfyUI history before retrying from scratch; the server may still have completed the prompt -- or just call again with `resume_prompt_id` set to the `prompt_id` from the timeout error.
 - Preserve and pass `resume_context` from the timeout result alongside
   `resume_prompt_id` to retain the original workflow hash and seed; without it
-  provenance is reported as unknown. Resume does not re-upload reference images.
+  provenance is reported as unknown. Image and video resume do not re-upload
+  reference images.
 
 ## Music (`comfyui_music`)
 
