@@ -95,6 +95,7 @@ class VideoCompose(BaseTool):
                 ),
             },
             "input_path": {"type": "string"},
+            "project_dir": {"type": "string", "description": "Project root for narrative selection validation and relative asset paths."},
             "output_path": {"type": "string"},
             "edit_decisions": {
                 "type": "object",
@@ -1592,6 +1593,34 @@ class VideoCompose(BaseTool):
         if not edit_decisions:
             return ToolResult(success=False, error="edit_decisions required for render")
 
+        selection = edit_decisions.get("metadata", {}).get("narrative_selection")
+        if selection is not None:
+            project_dir = inputs.get("project_dir")
+            if not project_dir or not isinstance(selection, dict) or not selection:
+                return ToolResult(success=False, error="Narrative selection requires a project_dir and non-empty selection")
+            from lib.narrative_assets import NarrativeAssets
+            catalog_path = Path(project_dir) / "artifacts" / "narrative_assets.json"
+            if not catalog_path.is_file():
+                return ToolResult(success=False, error="Narrative selection catalog is missing")
+            catalog = NarrativeAssets(project_dir)
+            manifest_selection = (asset_manifest or {}).get("metadata", {}).get("narrative_selection", {})
+            from lib.checkpoint import read_checkpoint
+            project_root = Path(project_dir).resolve()
+            asset_checkpoint = read_checkpoint(project_root.parent, project_root.name, "assets")
+            edit_checkpoint = read_checkpoint(project_root.parent, project_root.name, "edit")
+            approved_selection = ((asset_checkpoint or {}).get("artifacts", {}).get("asset_manifest", {}).get("metadata", {}).get("narrative_selection", {}))
+            edit_selection = ((edit_checkpoint or {}).get("artifacts", {}).get("edit_decisions", {}).get("metadata", {}).get("narrative_selection", {}))
+            if (not asset_checkpoint or asset_checkpoint.get("status") != "completed"
+                    or not asset_checkpoint.get("human_approved")
+                    or not edit_checkpoint or edit_checkpoint.get("status") != "completed"):
+                return ToolResult(success=False, error="Narrative selection requires approved assets and completed edit checkpoints")
+            for shot_id, take_id in selection.items():
+                if (catalog.data.get("shots", {}).get(shot_id, {}).get("selected") != take_id
+                        or manifest_selection.get(shot_id) != take_id
+                        or approved_selection.get(shot_id) != take_id
+                        or edit_selection.get(shot_id) != take_id):
+                    return ToolResult(success=False, error=f"Narrative selection changed for {shot_id}; renew asset approval and edit")
+
         # --- Runtime routing: honor render_runtime locked at proposal ---
         # Silent swaps are forbidden by governance. Resolve this before any
         # composition-mode branching so `composition_mode="atelier"` cannot
@@ -1682,6 +1711,21 @@ class VideoCompose(BaseTool):
             resolved_cut = dict(cut)
             if source_id in asset_lookup:
                 resolved_cut["source"] = asset_lookup[source_id]["path"]
+                if selection is not None:
+                    root = Path(inputs["project_dir"]).resolve()
+                    source = (root / resolved_cut["source"]).resolve()
+                    if not source.is_relative_to(root) or not source.is_file():
+                        return ToolResult(success=False, error=f"Narrative asset is missing or outside project: {source_id}")
+                    resolved_cut["source"] = str(source)
+            if selection is not None and resolved_cut.get("id") in selection:
+                shot_id = resolved_cut["id"]
+                selected = catalog.data["shots"][shot_id]["takes"][selection[shot_id]]
+                expected = (Path(inputs["project_dir"]).resolve() / selected["path"]).resolve()
+                actual = Path(resolved_cut.get("source", ""))
+                if not actual.is_absolute():
+                    actual = Path(inputs["project_dir"]).resolve() / actual
+                if actual.resolve() != expected or not expected.is_file():
+                    return ToolResult(success=False, error=f"Cut source does not match narrative selection for {shot_id}")
             resolved_cuts.append(resolved_cut)
 
         # --- Pre-compose validation gate ---

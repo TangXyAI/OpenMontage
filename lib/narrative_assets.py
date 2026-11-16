@@ -98,7 +98,8 @@ class NarrativeAssets:
                     if key in take["metadata"]:
                         item[key] = take["metadata"][key]
                 assets.append(item)
-        return {"version": "1.0", "assets": assets}
+        selection = {shot_id: shot["selected"] for shot_id, shot in self.data["shots"].items() if shot.get("selected")}
+        return {"version": "1.0", "assets": assets, "metadata": {"narrative_selection": selection}}
 
     def select_take(self, shot_id: str, take_id: str) -> None:
         shot = self.data["shots"].get(shot_id)
@@ -118,4 +119,5 @@ class NarrativeAssets:
             take = shot["takes"][shot["selected"]]
             source = self.root / self._media(take["path"])
             cuts.append({"id": shot_id, "source": str(source), "in_seconds": 0, "out_seconds": take["duration_seconds"]})
-        return {"version": "1.0", "render_runtime": render_runtime, "cuts": cuts}
+        selection = {shot_id: self.data["shots"][shot_id]["selected"] for shot_id in shot_ids}
+        return {"version": "1.0", "render_runtime": render_runtime, "cuts": cuts, "metadata": {"narrative_selection": selection}}
