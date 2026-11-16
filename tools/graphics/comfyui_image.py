@@ -99,6 +99,9 @@ class ComfyUIImage(BaseTool):
                 "type": "string",
                 "description": "Optional full ComfyUI workflow JSON. Requires output_node.",
             },
+            "workflow_bindings": {"type": "object", "description": "Map input names to lists of {node, input} targets in a custom workflow."},
+            "reference_image_path": {"type": "string", "description": "Local image to upload for an explicitly bound custom workflow."},
+            "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {
                 "type": "string",
                 "description": "Optional path to a ComfyUI workflow JSON file. Requires output_node.",
@@ -192,7 +195,7 @@ class ComfyUIImage(BaseTool):
                 )
 
         start = time.time()
-        seed = inputs.get("seed") or ComfyUIClient.random_seed()
+        seed = inputs.get("seed") if inputs.get("seed") is not None else ComfyUIClient.random_seed()
         width = inputs.get("width", 1024)
         height = inputs.get("height", 1024)
         steps = inputs.get("steps", 20)
@@ -202,6 +205,7 @@ class ComfyUIImage(BaseTool):
         try:
             if custom_workflow:
                 workflow = self._load_custom_workflow(inputs)
+                workflow = self._client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
                 output_node = str(inputs["output_node"])
             else:
                 workflow = ComfyUIClient.load_workflow(_WORKFLOWS / "flux2-txt2img.json")

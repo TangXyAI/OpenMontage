@@ -230,6 +230,8 @@ class ComfyUIVideo(BaseTool):
                 "type": "string",
                 "description": "Optional full ComfyUI workflow JSON. Requires output_node.",
             },
+            "workflow_bindings": {"type": "object", "description": "Map input names to lists of {node, input} targets in a custom workflow."},
+            "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {
                 "type": "string",
                 "description": "Optional path to a ComfyUI workflow JSON file. Requires output_node.",
@@ -496,7 +498,7 @@ class ComfyUIVideo(BaseTool):
                     ),
                 )
         start = time.time()
-        seed = inputs.get("seed") or ComfyUIClient.random_seed()
+        seed = inputs.get("seed") if inputs.get("seed") is not None else ComfyUIClient.random_seed()
         output_path = Path(
             inputs.get("output_path", f"comfyui_video_{operation}_{seed}.mp4")
         )
@@ -504,6 +506,7 @@ class ComfyUIVideo(BaseTool):
         try:
             if custom_workflow:
                 workflow = self._load_custom_workflow(inputs)
+                workflow = self._client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
                 output_node = str(inputs["output_node"])
             elif model_family in partner_nodes:
                 node_class = partner_nodes[model_family]

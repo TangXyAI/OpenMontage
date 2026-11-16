@@ -12,7 +12,7 @@ import os
 import random
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 import requests
@@ -476,7 +476,60 @@ class ComfyUIClient:
                 timeout=30,
             )
         resp.raise_for_status()
-        return resp.json()["name"]
+        data = resp.json()
+        if data.get("type", "input") != "input":
+            raise ComfyUIError("Uploaded image was not stored in the input folder")
+        name = data.get("name")
+        subfolder = data.get("subfolder") or ""
+        if not isinstance(name, str) or not name or not isinstance(subfolder, str):
+            raise ComfyUIError("Invalid image upload response")
+        relative = PurePosixPath(subfolder) / name
+        if relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
+            raise ComfyUIError("Invalid image path in upload response")
+        return str(relative)
+
+    def bind_workflow(self, workflow: dict, bindings: dict, values: dict) -> dict:
+        """Apply explicit input bindings to a custom API workflow.
+
+        Reference paths are uploaded to the server; other values are inserted
+        verbatim. Only existing scalar inputs may be replaced.
+        """
+        patches: dict[str, dict[str, Any]] = {}
+        pending: list[tuple[str, Any, bool, list]] = []
+        occupied: set[tuple[str, str]] = set()
+        for parameter, targets in bindings.items():
+            is_reference = parameter.startswith("reference_images.")
+            value = (values.get("reference_images") or {}).get(parameter.partition(".")[2]) if is_reference else values.get(parameter)
+            if value is None:
+                raise ComfyUIError(f"Missing workflow binding value: {parameter}")
+            if not isinstance(targets, list) or not targets:
+                raise ComfyUIError(f"Workflow binding {parameter} needs a non-empty target list")
+            is_image = is_reference or parameter in {"reference_image_path", "image_path"}
+            if is_image:
+                path = Path(value)
+                if not path.is_file():
+                    raise ComfyUIError(f"Reference image not found: {path}")
+            for target in targets:
+                if not isinstance(target, dict):
+                    raise ComfyUIError(f"Invalid workflow target: {target!r}")
+                node, key = str(target.get("node", "")), target.get("input")
+                node_inputs = workflow.get(node, {}).get("inputs", {})
+                if key not in node_inputs:
+                    raise ComfyUIError(f"Workflow input {node}.{key} does not exist")
+                if isinstance(node_inputs[key], list):
+                    raise ComfyUIError(f"Workflow input {node}.{key} is a connection, not a value")
+                if (node, key) in occupied:
+                    raise ComfyUIError(f"Duplicate workflow binding for {node}.{key}")
+                occupied.add((node, key))
+            pending.append((parameter, value, is_image, targets))
+        for _, value, is_image, targets in pending:
+            if is_image:
+                path = Path(value)
+                value = self.upload_image(path, f"{uuid.uuid4().hex}{path.suffix}")
+            for target in targets:
+                node, key = str(target["node"]), target["input"]
+                patches.setdefault(node, {})[key] = value
+        return self.patch_workflow(workflow, patches)
 
     # ------------------------------------------------------------------
     # High-level helper

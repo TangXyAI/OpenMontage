@@ -197,6 +197,9 @@ class ImageSelector(BaseTool):
                     "model readiness. Requires output_node."
                 ),
             },
+            "workflow_bindings": {"type": "object", "description": "Explicit custom workflow input bindings."},
+            "reference_image_path": {"type": "string", "description": "Local reference image for a bound custom workflow."},
+            "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {
                 "type": "string",
                 "description": (

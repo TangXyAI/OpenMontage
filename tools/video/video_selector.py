@@ -276,6 +276,9 @@ class VideoSelector(BaseTool):
                     "model readiness. Requires output_node."
                 ),
             },
+            "workflow_bindings": {"type": "object", "description": "Explicit custom workflow input bindings."},
+            "model_family": {"type": "string", "description": "Backend workflow family, such as minimax_h3_local for ComfyUI."},
+            "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {
                 "type": "string",
                 "description": (
