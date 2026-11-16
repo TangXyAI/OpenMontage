@@ -43,6 +43,33 @@ Use this skill before calling `comfyui_image`, `comfyui_video`, or `comfyui_musi
 
 ## Templated vs Fixed Nodes
 
+Custom image and video workflows can opt into explicit parameter injection with
+`workflow_bindings`. Map each input parameter to one or more `{node, input}`
+targets, for example:
+
+```json
+{
+  "prompt": "A runner crosses a rainy street",
+  "seed": 42,
+  "reference_image_path": "projects/example/assets/images/runner.png",
+  "workflow_path": "projects/example/h3-api.json",
+  "output_node": "9",
+  "workflow_bindings": {
+    "prompt": [{"node": "1", "input": "text"}],
+    "seed": [{"node": "2", "input": "seed"}],
+    "reference_image_path": [{"node": "3", "input": "image"}]
+  }
+}
+```
+
+Node IDs and input names must match the exported API workflow. The image is
+uploaded to the configured ComfyUI server before submission. Binding targets
+must be existing scalar inputs, not links between nodes. Unbound parameters
+are not injected. Specify `model_family: "minimax_h3_local"` for local H3.
+For multiple references pass `reference_images: {"hero": "...", "place": "..."}`
+and bind `reference_images.hero` and `reference_images.place` to the respective
+image inputs. Use only graphs that actually support the intended references.
+
 - Identify templated nodes before execution: prompt text, seed, dimensions, frame count, source image, sampler settings, and output filename prefix.
 - Fixed nodes are model loaders, VAEs, text encoders, LoRA loaders, schedulers, and graph wiring. Do not mutate those unless the workflow author intended that customization.
 - For community workflows, inspect each loader node and note every required model or custom node before running. Missing models should be handled through the tool's structured `missing_models` payload when available.
@@ -71,6 +98,9 @@ Use this skill before calling `comfyui_image`, `comfyui_video`, or `comfyui_musi
 - If models are missing, read `data.missing_models[]`; each item should include the file name, role, destination hint, and download URL when OpenMontage knows it.
 - If custom nodes are missing, ask the user to install them through ComfyUI Manager or the workflow author's documented install path, then restart ComfyUI.
 - If a long render times out locally, check ComfyUI history before retrying from scratch; the server may still have completed the prompt -- or just call again with `resume_prompt_id` set to the `prompt_id` from the timeout error.
+- Preserve and pass `resume_context` from the timeout result alongside
+  `resume_prompt_id` to retain the original workflow hash and seed; without it
+  provenance is reported as unknown. Resume does not re-upload reference images.
 
 ## Music (`comfyui_music`)
 

@@ -25,6 +25,12 @@ For local ComfyUI, export the official workflow in API format and pass
 required diffusion model, Qwen3-VL text encoder, video VAE, and audio VAE; it
 does not silently download large weights.
 
+The ComfyUI host may be another machine. Server reachability does not establish
+that the H3 model stack or a particular graph is ready. Bind inputs explicitly
+as described by the `comfyui` skill, and check the chosen graph's supported
+reference inputs rather than assuming that arbitrary multi-reference or
+first/last-frame graphs are available locally.
+
 ## Operations and prompting
 
 - Text-to-video: concrete ratio; do not use `adaptive` without visual input.

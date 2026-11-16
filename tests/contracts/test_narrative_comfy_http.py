@@ -2,6 +2,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -10,7 +11,7 @@ from tools._comfyui.client import ComfyUIClient, ComfyUIError
 
 @pytest.fixture
 def comfy_server():
-    state = {"uploads": 0, "prompts": [], "upload_type": "input"}
+    state = {"uploads": 0, "prompts": [], "upload_type": "input", "media": {}}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -24,7 +25,7 @@ def comfy_server():
                 result = {"name": f"frame{state['uploads']}.png", "subfolder": "refs", "type": state["upload_type"]}
             else:
                 state["prompts"].append(json.loads(body)["prompt"])
-                result = {"prompt_id": "p1", "number": 1, "node_errors": {}}
+                result = {"prompt_id": f"p{len(state['prompts'])}", "number": 1, "node_errors": {}}
             payload = json.dumps(result).encode()
             self.send_response(200)
             self.end_headers()
@@ -32,9 +33,11 @@ def comfy_server():
 
         def do_GET(self):
             if self.path.startswith("/view"):
-                payload = b"video"
+                name = parse_qs(urlparse(self.path).query).get("filename", [""])[0]
+                payload = state["media"].get(name, b"video")
             elif self.path.startswith("/history/"):
-                payload = json.dumps({"p1": {"outputs": {"9": {"images": [{"filename": "out.mp4", "subfolder": "", "type": "output"}]}}}}).encode()
+                prompt_id = self.path.rsplit("/", 1)[-1]
+                payload = json.dumps({prompt_id: {"outputs": {"9": {"images": [{"filename": f"{prompt_id}.mp4", "subfolder": "", "type": "output"}]}}}}).encode()
             else:
                 payload = b"{}"
             self.send_response(200)

@@ -370,6 +370,10 @@ class VideoCompose(BaseTool):
         start = time.time()
 
         try:
+            if operation in {"compose", "render", "remotion_render"}:
+                validation = self._validate_narrative_selection(inputs)
+                if validation is not None:
+                    return validation
             if operation == "compose":
                 result = self._compose(inputs)
             elif operation == "render":
@@ -389,6 +393,48 @@ class VideoCompose(BaseTool):
 
         result.duration_seconds = round(time.time() - start, 2)
         return result
+
+    @staticmethod
+    def _validate_narrative_selection(inputs: dict[str, Any]) -> Optional[ToolResult]:
+        edit = inputs.get("edit_decisions") or {}
+        selection = edit.get("metadata", {}).get("narrative_selection")
+        if selection is None:
+            return None
+        project_dir = inputs.get("project_dir")
+        if not project_dir or not isinstance(selection, dict) or not selection:
+            return ToolResult(success=False, error="Narrative selection requires a project_dir and non-empty selection")
+        from lib.narrative_assets import NarrativeAssets
+        from lib.checkpoint import read_checkpoint
+        project_root = Path(project_dir).resolve()
+        if not (project_root / "artifacts" / "narrative_assets.json").is_file():
+            return ToolResult(success=False, error="Narrative selection catalog is missing")
+        catalog = NarrativeAssets(project_root)
+        manifest_selection = (inputs.get("asset_manifest") or {}).get("metadata", {}).get("narrative_selection", {})
+        asset_checkpoint = read_checkpoint(project_root.parent, project_root.name, "assets")
+        edit_checkpoint = read_checkpoint(project_root.parent, project_root.name, "edit")
+        approved_selection = ((asset_checkpoint or {}).get("artifacts", {}).get("asset_manifest", {}).get("metadata", {}).get("narrative_selection", {}))
+        edit_selection = ((edit_checkpoint or {}).get("artifacts", {}).get("edit_decisions", {}).get("metadata", {}).get("narrative_selection", {}))
+        if (not asset_checkpoint or asset_checkpoint.get("status") != "completed"
+                or not asset_checkpoint.get("human_approved")
+                or not edit_checkpoint or edit_checkpoint.get("status") != "completed"):
+            return ToolResult(success=False, error="Narrative selection requires approved assets and completed edit checkpoints")
+        for shot_id, take_id in selection.items():
+            if (catalog.data.get("shots", {}).get(shot_id, {}).get("selected") != take_id
+                    or manifest_selection.get(shot_id) != take_id
+                    or approved_selection.get(shot_id) != take_id
+                    or edit_selection.get(shot_id) != take_id):
+                return ToolResult(success=False, error=f"Narrative selection changed for {shot_id}; renew asset approval and edit")
+        lookup = {asset["id"]: asset["path"] for asset in (inputs.get("asset_manifest") or {}).get("assets", [])}
+        for cut in edit.get("cuts", []):
+            shot_id = cut.get("id")
+            if shot_id not in selection:
+                continue
+            expected = (project_root / catalog.data["shots"][shot_id]["takes"][selection[shot_id]]["path"]).resolve()
+            source = lookup.get(cut.get("source"), cut.get("source", ""))
+            actual = (project_root / source).resolve()
+            if actual != expected or not actual.is_file() or not actual.is_relative_to(project_root):
+                return ToolResult(success=False, error=f"Cut source does not match narrative selection for {shot_id}")
+        return None
 
     _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 
@@ -1595,31 +1641,8 @@ class VideoCompose(BaseTool):
 
         selection = edit_decisions.get("metadata", {}).get("narrative_selection")
         if selection is not None:
-            project_dir = inputs.get("project_dir")
-            if not project_dir or not isinstance(selection, dict) or not selection:
-                return ToolResult(success=False, error="Narrative selection requires a project_dir and non-empty selection")
             from lib.narrative_assets import NarrativeAssets
-            catalog_path = Path(project_dir) / "artifacts" / "narrative_assets.json"
-            if not catalog_path.is_file():
-                return ToolResult(success=False, error="Narrative selection catalog is missing")
-            catalog = NarrativeAssets(project_dir)
-            manifest_selection = (asset_manifest or {}).get("metadata", {}).get("narrative_selection", {})
-            from lib.checkpoint import read_checkpoint
-            project_root = Path(project_dir).resolve()
-            asset_checkpoint = read_checkpoint(project_root.parent, project_root.name, "assets")
-            edit_checkpoint = read_checkpoint(project_root.parent, project_root.name, "edit")
-            approved_selection = ((asset_checkpoint or {}).get("artifacts", {}).get("asset_manifest", {}).get("metadata", {}).get("narrative_selection", {}))
-            edit_selection = ((edit_checkpoint or {}).get("artifacts", {}).get("edit_decisions", {}).get("metadata", {}).get("narrative_selection", {}))
-            if (not asset_checkpoint or asset_checkpoint.get("status") != "completed"
-                    or not asset_checkpoint.get("human_approved")
-                    or not edit_checkpoint or edit_checkpoint.get("status") != "completed"):
-                return ToolResult(success=False, error="Narrative selection requires approved assets and completed edit checkpoints")
-            for shot_id, take_id in selection.items():
-                if (catalog.data.get("shots", {}).get(shot_id, {}).get("selected") != take_id
-                        or manifest_selection.get(shot_id) != take_id
-                        or approved_selection.get(shot_id) != take_id
-                        or edit_selection.get(shot_id) != take_id):
-                    return ToolResult(success=False, error=f"Narrative selection changed for {shot_id}; renew asset approval and edit")
+            catalog = NarrativeAssets(inputs["project_dir"])
 
         # --- Runtime routing: honor render_runtime locked at proposal ---
         # Silent swaps are forbidden by governance. Resolve this before any
