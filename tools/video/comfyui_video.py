@@ -231,6 +231,7 @@ class ComfyUIVideo(BaseTool):
                 "description": "Optional full ComfyUI workflow JSON. Requires output_node.",
             },
             "workflow_bindings": {"type": "object", "description": "Map input names to lists of {node, input} targets in a custom workflow."},
+            "resume_context": {"type": "object", "description": "Original provenance returned with a timed-out prompt."},
             "reference_images": {"type": "object", "description": "Named local image paths for custom workflow bindings."},
             "workflow_path": {
                 "type": "string",
@@ -374,6 +375,7 @@ class ComfyUIVideo(BaseTool):
                 "hosted": False,
                 "network_required": False,
                 "cost": "local compute",
+                "readiness": "unknown",
             },
             "gemini_omni_flash": {
                 "hosted": True,
@@ -413,6 +415,12 @@ class ComfyUIVideo(BaseTool):
         return 240.0  # ~4 min
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
+        resume_id = inputs.get("resume_prompt_id")
+        resume_context = inputs.get("resume_context") or {}
+        if resume_id and resume_context and resume_context.get("prompt_id") != resume_id:
+            return ToolResult(success=False, error="resume_context prompt_id does not match resume_prompt_id")
+        if resume_id and resume_context and inputs.get("output_node") and str(inputs["output_node"]) != resume_context.get("output_node"):
+            return ToolResult(success=False, error="output_node does not match the original resume_context")
         custom_workflow = bool(
             inputs.get("workflow_json") or inputs.get("workflow_path")
         )
@@ -422,13 +430,13 @@ class ComfyUIVideo(BaseTool):
             "seedance_2.5": "ByteDance2TextToVideoNode",
             "minimax_h3_api": "MinimaxHailuo03TextToVideoNode",
         }
-        if model_family == "ltx_2.5_local" and not custom_workflow:
+        if model_family == "ltx_2.5_local" and not custom_workflow and not resume_id:
             return ToolResult(
                 success=False,
                 error="LTX-2.5 local requires an installed model stack and an exported ComfyUI API workflow via workflow_path/workflow_json plus output_node. No older LTX or WAN fallback is performed.",
                 data={"model": "LTX-2.5", "setup_required": True},
             )
-        if model_family == "minimax_h3_local" and not custom_workflow:
+        if model_family == "minimax_h3_local" and not custom_workflow and not resume_id:
             return ToolResult(
                 success=False,
                 data={
@@ -470,7 +478,7 @@ class ComfyUIVideo(BaseTool):
 
         operation = inputs.get("operation", "text_to_video")
 
-        if not custom_workflow and model_family == "wan2.2":
+        if not custom_workflow and model_family == "wan2.2" and not resume_id:
             required = (
                 _REQUIRED_MODELS_I2V
                 if operation == "image_to_video"
@@ -498,13 +506,18 @@ class ComfyUIVideo(BaseTool):
                     ),
                 )
         start = time.time()
-        seed = inputs.get("seed") if inputs.get("seed") is not None else ComfyUIClient.random_seed()
+        seed = resume_context.get("seed") if resume_id else (inputs.get("seed") if inputs.get("seed") is not None else ComfyUIClient.random_seed())
         output_path = Path(
             inputs.get("output_path", f"comfyui_video_{operation}_{seed}.mp4")
         )
 
         try:
-            if custom_workflow:
+            if resume_id:
+                output_node = str(inputs.get("output_node") or resume_context.get("output_node") or "")
+                if not output_node:
+                    raise ComfyUIError("Resuming a video requires the original output_node")
+                workflow = {}
+            elif custom_workflow:
                 workflow = self._load_custom_workflow(inputs)
                 workflow = self._client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
                 output_node = str(inputs["output_node"])
@@ -523,9 +536,9 @@ class ComfyUIVideo(BaseTool):
             else:
                 workflow, output_node = self._build_t2v(inputs, seed, output_path)
 
-            provenance = self._workflow_provenance(
-                inputs, custom_workflow, output_node, operation, workflow, model_family
-            )
+            provenance = (resume_context.get("workflow_provenance") or {"source": "unknown_resumed_task", "prompt_id": resume_id, "output_node": output_node}
+                          if resume_id else self._workflow_provenance(
+                              inputs, custom_workflow, output_node, operation, workflow, model_family))
             paths = self._client.generate(
                 workflow,
                 output_node=output_node,
@@ -538,6 +551,13 @@ class ComfyUIVideo(BaseTool):
 
         except ComfyUIError as exc:
             data = {"prompt_id": exc.prompt_id} if exc.prompt_id else {}
+            if exc.prompt_id and "provenance" in locals():
+                data["resume_context"] = (resume_context if resume_id else {
+                    "prompt_id": exc.prompt_id, "workflow_provenance": provenance,
+                    "seed": seed, "model": self._model_name(inputs, custom_workflow),
+                    "prompt": inputs.get("prompt"), "output_node": output_node,
+                    "hosted": model_family in partner_nodes and not custom_workflow,
+                })
             if exc.prompt_id:
                 error_msg = (
                     f"{exc}\n\nThis job was NOT cancelled and is very likely still "
@@ -554,18 +574,18 @@ class ComfyUIVideo(BaseTool):
                 success=False, error=f"ComfyUI video generation failed: {exc}"
             )
 
-        model_name = self._model_name(inputs, custom_workflow)
-        partner_execution = model_family in partner_nodes and not custom_workflow
+        model_name = (resume_context.get("model") or "unknown-resumed-task") if resume_id else self._model_name(inputs, custom_workflow)
+        partner_execution = model_family in partner_nodes and not custom_workflow and not resume_id
         result_data: dict[str, Any] = {
             "provider": "comfyui",
             "model": model_name,
-            "prompt": inputs["prompt"],
+            "prompt": resume_context.get("prompt") if resume_id else inputs["prompt"],
             "operation": operation,
             "output": str(paths[0]),
             "format": "mp4",
             "workflow_provenance": provenance,
-            "hosted": partner_execution,
-            "network_required": partner_execution,
+            "hosted": resume_context.get("hosted") if resume_id else partner_execution,
+            "network_required": resume_context.get("hosted") if resume_id else partner_execution,
         }
         if partner_execution:
             result_data.update(
@@ -577,7 +597,7 @@ class ComfyUIVideo(BaseTool):
                     "billing": "ComfyUI Partner Node credits",
                 }
             )
-        else:
+        elif not resume_id:
             width = inputs.get("width", 832 if operation == "text_to_video" else 640)
             height = inputs.get("height", 480 if operation == "text_to_video" else 640)
             num_frames = inputs.get("num_frames", 81)
@@ -608,7 +628,7 @@ class ComfyUIVideo(BaseTool):
             success=True,
             data=result_data,
             artifacts=[str(p) for p in paths],
-            cost_usd=self.estimate_cost(inputs),
+            cost_usd=0.0 if resume_id else self.estimate_cost(inputs),
             duration_seconds=round(time.time() - start, 2),
             seed=seed,
             model=model_name,

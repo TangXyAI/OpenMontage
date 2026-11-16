@@ -102,3 +102,40 @@ def test_selector_passes_h3_bindings_and_multiple_images(comfy_server, tmp_path,
     assert sent["2"]["inputs"]["image"] == "refs/frame2.png"
     assert sent["3"]["inputs"] == {"text": "run", "seed": 0}
     assert sent["4"] == workflow["4"]
+
+
+def test_resume_uses_existing_prompt_without_upload_or_submit(comfy_server, tmp_path, monkeypatch):
+    from tools.video.comfyui_video import ComfyUIVideo
+
+    url, state = comfy_server
+    tool = ComfyUIVideo()
+    tool._client.server_url = url
+    def timeout(prompt_id, **kwargs):
+        raise ComfyUIError("timed out", prompt_id=prompt_id)
+    monkeypatch.setattr(tool._client, "_wait", timeout)
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"png")
+    inputs = {"prompt": "run", "model_family": "minimax_h3_local", "workflow_json": json.dumps({"1": {"inputs": {"image": "old"}}, "9": {"inputs": {}}}), "output_node": "9", "output_path": str(tmp_path / "out.mp4"), "reference_image_path": str(ref), "workflow_bindings": {"reference_image_path": [{"node": "1", "input": "image"}]}}
+    first = tool.execute(inputs)
+    assert not first.success and first.data["prompt_id"] == "p1"
+    assert first.data["resume_context"]["workflow_provenance"]["workflow_hash_sha256"]
+    ref.unlink()
+    result = tool.execute({**inputs, "resume_prompt_id": "p1"})
+    assert result.success, result.error
+    assert len(state["prompts"]) == 1 and state["uploads"] == 1
+    assert result.seed is None
+    assert result.data["workflow_provenance"].get("workflow_hash_sha256") is None
+    restored = tool.execute({**inputs, "resume_prompt_id": "p1", "resume_context": first.data["resume_context"]})
+    assert restored.success
+    assert restored.data["workflow_provenance"] == first.data["resume_context"]["workflow_provenance"]
+    assert restored.seed == first.data["resume_context"]["seed"]
+
+
+def test_h3_preflight_does_not_infer_readiness_from_wan_or_server(comfy_server):
+    from tools.video.comfyui_video import ComfyUIVideo
+
+    tool = ComfyUIVideo()
+    tool._client.server_url = comfy_server[0]
+    modes = tool.get_info()["execution_modes"]
+    assert modes["minimax_h3_local"]["readiness"] == "unknown"
+    assert modes["minimax_h3_api"]["hosted"] is True
