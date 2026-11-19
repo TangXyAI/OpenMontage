@@ -59,7 +59,7 @@ print(render_menu(menu))
 "
 ```
 
-`lib.video_model_selection.build_menu` returns the fixed catalog ordered **local first** — HyperFlow GGUF → HyperFlow INT8 → H3 local → cloud H3 → Seedance 2.5 → Pika H3 Flex — with `route_id`, `family`, `route`, `tool`, `model`, `operations`, `available`/`status`, `cost_5s`, and `setup` hints for unavailable tools.
+`lib.video_model_selection.build_menu` returns the fixed catalog ordered by `priority`, **local first** — HyperFlow GGUF → HyperFlow INT8 → H3 local → cloud H3 (direct, fal, Runway, Atlas, ComfyUI partner) → H3 Max → Pika H3 Flex → Seedance 2.5 — with `route_id`, `family`, `route`, `tool`, `model`, `operations`, `available`/`status`, `cost_5s`, and `setup` hints for unavailable tools.
 
 When any local route is a candidate (`hyperflow_gguf`, `hyperflow_int8`, `h3_local`), check the machine before offering it:
 
@@ -80,7 +80,14 @@ Show `result["blockers"]` verbatim as missing weights, node packs, or server sta
 **Record the choice before leaving proposal.** Write `proposal_packet.metadata.video_model_shortlist` (the menu rows the user saw) and `proposal_packet.metadata.selected_route` (the approved `route_id`), then append the decision with `record_selection` under `category: "provider_selection"`, `subject: "Video model and route"`:
 
 ```python
-from lib.video_model_selection import record_selection
+from lib.video_model_selection import build_menu, record_selection
+from tools.tool_registry import registry
+
+registry.discover()
+shortlist = build_menu(registry, duration=5)  # the rows the user reviewed
+selected_route = "<approved route_id>"        # the route_id the user approved
+
+# Every options_considered item needs option_id, label, score (0-1), and reason.
 record_selection(
     "projects/<project-id>/decision_log.json",
     project_id="<project-id>",
@@ -90,6 +97,7 @@ record_selection(
         {
             "option_id": row["route_id"],
             "label": f"{row['family']} — {row['route']}",
+            "score": 1.0 if row["route_id"] == selected_route else 0.5,
             "reason": row["notes"],
         }
         for row in shortlist

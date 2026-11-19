@@ -59,10 +59,27 @@ Recommended metadata keys:
 
 ### 5. Declare `required_assets` And `location_map`
 
-Every scene in `scene_plan.scenes[]` must carry two explicit fields before the assets stage can run:
+Every scene in `scene_plan.scenes[]` must carry a `required_assets` array. Each item must match `schemas/artifacts/scene_plan.schema.json` exactly:
 
-- **`required_assets`** — an array, one entry per asset the scene needs. Each entry names `kind` (`character`, `location`, or `prop`), a stable `descriptor` (the exact identity text the asset sheet will be generated from), and `source` (`existing`, `generate`, or `reference`). For `narrative_generated`, this list is the input to the asset-sheet gate; an asset that is not listed cannot be generated for the shot.
-- **`location_map`** — the scene's spatial contract: locked master angle, named anchor objects (door, window, table, skyline), camera-relative positions, and the single light source and shadow direction. The asset director builds the empty location plate from this map, and every shot in the scene inherits it.
+- **`type`** — the asset class (for example `character`, `location`, `prop`, `reference`).
+- **`description`** — the stable text the asset sheet is generated from; for characters this is the descriptor copied verbatim into shot prompts.
+- **`source`** — one of `generate`, `source`, `provided`, or `record`. (`existing` and `reference` are not valid enum values.)
+
+For `narrative_generated`, this list is the input to the asset-sheet gate; an asset that is not listed cannot be generated for the shot.
+
+`location_map` is **not** a scene field — scene objects have `additionalProperties: false`. Record it in the open root `metadata` object, keyed by scene id:
+
+```json
+{
+  "metadata": {
+    "location_map": {
+      "s02": "Locked master angle from the door; table center-frame; window camera-left; single key light through the window, shadow falls right."
+    }
+  }
+}
+```
+
+Each value is one string describing the locked master angle, named anchor objects (door, window, table, skyline), camera-relative positions, and the single light source and shadow direction. Copy the matching string into that scene's shots' `shot_spec.location_map`, so the location plate, the shot spec, and the take share one spatial contract. The asset director builds the empty location plate from it.
 
 Every shot also needs a stable **shot id** (`shot_id`). The id is the key later stages use for shot specs (`schemas/artifacts/shot_spec.schema.json`), take selection, and edit decisions — a shot without an id cannot be tracked through the assets gate. Use a scene-prefixed form such as `s02-sh03`.
 
@@ -82,8 +99,9 @@ Every shot also needs a stable **shot id** (`shot_id`). The id is the key later 
 
 ### 7. Quality Gate
 
-- every scene declares `required_assets` (kind, descriptor, source) and a `location_map`,
-- every shot has a stable `shot_id`,
+- every scene declares `required_assets` with `type`, `description`, and a valid `source`,
+- every scene id has an entry in `scene_plan.metadata.location_map`,
+- every shot has a stable `shot_id` and carries its scene's `location_map` string,
 - every beat has a scene treatment,
 - hero frames are identifiable AND fully specified across all 5 aspects,
 - support inserts are justified,

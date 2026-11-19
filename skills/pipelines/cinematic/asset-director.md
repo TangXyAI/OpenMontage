@@ -38,7 +38,21 @@ For `narrative_generated` productions, work through this chain in order. Each st
 2. **Stress test.** Run every sheet against the four bars — identity across pose/angle/light, wardrobe constancy, spatial readability, and reusability — before locking it. **A failed stress test returns to asset design**: rewrite the descriptor, regenerate the sheet or plate, retest. Do not try to fix an asset failure with more video takes; the model is not the source of the inconsistency.
 3. **Optional 360° empty-scene sweep.** When coverage needs reverse angles or shot-reverse-shot, generate a slow 360° sweep of the empty location to fill in off-camera space and reduce drift when the camera crosses the axis.
 4. **Video character card.** Turn each locked character sheet into a video character card: a short moving reference clip showing the character turning, blinking, speaking, and moving in the locked wardrobe. The card is the video-model identity anchor — stills alone do not hold identity in motion generation.
-5. **Model and route gate.** Before the first generation call, present the exact batch parameters — model id, resolution, duration, take count, and total cost — and confirm the approved decision with `lib.video_model_selection.require_selected_route(decision_log, route_id)`. This is the `model_selection` sub-stage; no approved route means no generation.
+5. **Model and route gate.** Before the first generation call, present the exact batch parameters — model id, resolution, duration, take count, and total cost — and confirm the approved decision with `lib.video_model_selection.require_selected_route(decision_log, route_id)`. After the user confirms the batch, append a **second recorded decision** with `stage="assets"` so the gate verifies the confirmed parameters, not just the proposal pick:
+
+   ```python
+   from lib.video_model_selection import record_selection
+   record_selection(
+       "projects/<project-id>/decision_log.json",
+       project_id="<project-id>",
+       stage="assets",
+       route={"route_id": selected_route},
+       options=shortlist_options,  # same option_id/label/score/reason rows as proposal
+       reason=f"confirmed batch: {model_id}, {resolution}, {duration}s, {takes} takes, ${total_cost}",
+   )
+   ```
+
+   This is the `model_selection` sub-stage; no approved route means no generation.
 6. **Shot specs.** Write one model-neutral shot spec per shot and validate it against `schemas/artifacts/shot_spec.schema.json`: `shot_id`, `scene_id`, `duration_seconds`, `scene_context`, `references` (asset id, kind, path, role), `location_map`, `first_frame`, `format_mode`, `optics`, `camera`, `action_timing`, `physics`, `lighting`, `audio`, `character_acting`, `style`, `quality`, and `constraints`. Provider-specific parameters belong in the asset manifest, never in the shot spec.
 7. **Prompt compilation.** Compile each shot spec into the chosen model's prompt dialect — read `.agents/skills/hyperflow-h3/`, `.agents/skills/minimax-h3/`, or the matching Layer 3 skill. Copy the approved descriptor verbatim; add only scene-specific action, framing, and timing. Run the pre/post self-review below before sending anything.
 8. **Batch takes.** Generate inside the **take budget** — **2–4 takes per shot**, drafted at lower resolution within the same family where possible. A weak prompt is not fixed by more takes; if none of them lands, revisit the shot spec or the asset instead of extending the budget silently.
