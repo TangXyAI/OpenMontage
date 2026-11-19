@@ -1358,6 +1358,65 @@ Write `docs/superpowers/plans/artifacts/2026-11-19-hyperflow-smoke.md` with the 
 
 ---
 
+### Task 14f: Preserve the source frame rate in FFmpeg compose
+
+**Why:** The pilot render came out at 30 fps because `video_compose`'s FFmpeg compose path hardcodes 30 fps. The takes are native 24 fps; cinematic 24 fps must be preserved.
+
+**Files:**
+- Modify: `tools/video/video_compose.py`
+- Test: `tests/tools/test_video_compose_fps.py` (new)
+- Modify: `projects/hyperflow-pilot/artifacts/edit_decisions.json` (set `fps: 24`)
+- Modify: `docs/superpowers/plans/artifacts/2026-11-19-pilot-scene.md`
+
+**Interfaces:**
+- `VideoCompose` accepts an `fps` input (integer 1–120).
+- The FFmpeg compose path uses `inputs["fps"]` or `edit_decisions["fps"]`, defaulting to 30; the filter and `-r` use the same value.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+from tools.video.video_compose import VideoCompose
+
+
+def test_target_fps_prefers_input_then_edit_then_default():
+    tool = VideoCompose()
+    assert tool._target_fps({"fps": 24}, {}) == 24
+    assert tool._target_fps({}, {"fps": 24}) == 24
+    assert tool._target_fps({}, {}) == 30
+```
+
+- [ ] **Step 2: Run it to verify failure**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/tools/test_video_compose_fps.py -v`
+Expected: FAIL with `AttributeError`.
+
+- [ ] **Step 3: Implement**
+
+- Add the `fps` input property to the tool schema if absent (integer, 1–120, default 30).
+- Add `_target_fps(self, inputs, edit_decisions) -> int`.
+- In `_render_via_ffmpeg`, compute `target_fps` once and replace the hardcoded `"fps=30"` filter and `"-r", "30"` with it; update the comment that says 30 fps.
+
+- [ ] **Step 4: Run the focused test**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/tools/test_video_compose_fps.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Re-render the pilot at 24 fps**
+
+- Set `"fps": 24` in `projects/hyperflow-pilot/artifacts/edit_decisions.json`.
+- Re-run `video_compose` with the same project/edit decisions, `render_runtime="ffmpeg"`, output `projects/hyperflow-pilot/renders/final.mp4`.
+- Verify with ffprobe: 640x352, **24 fps**, ~20.0 s, one audio stream. Update `render_report.json`/`final_review.json`; the 30 fps warning must be gone.
+- Update `docs/superpowers/plans/artifacts/2026-11-19-pilot-scene.md` final render summary to 24 fps.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add tools/video/video_compose.py tests/tools/test_video_compose_fps.py docs/superpowers/plans/artifacts/2026-11-19-pilot-scene.md
+git commit -m "fix(compose): 保留源帧率并重出试点成片"
+```
+
+---
+
 ### Optional Task 15: Hell-Grind prompt corpus index (P2)
 
 **Files:**
