@@ -176,13 +176,16 @@ class ComfyUIVideo(BaseTool):
                     "seedance_2.5",
                     "minimax_h3_api",
                     "minimax_h3_local",
+                    "minimax_h3_hyperflow_local",
                     "ltx_2.5_local",
                 ],
                 "default": "wan2.2",
                 "description": (
                     "Built-in execution family. The three *_api/hosted families use "
                     "ComfyUI Partner Nodes and credits; minimax_h3_local uses open weights "
-                    "through a caller-supplied official/custom workflow."
+                    "through a caller-supplied official/custom workflow, and "
+                    "minimax_h3_hyperflow_local uses HyperFlow H3 open weights through a "
+                    "caller-supplied API workflow."
                 ),
             },
             "reference_image_path": {
@@ -450,6 +453,31 @@ class ComfyUIVideo(BaseTool):
                 error=(
                     "minimax_h3_local requires the official MiniMax H3 ComfyUI workflow "
                     "exported in API format via workflow_json/workflow_path plus output_node."
+                ),
+            )
+        if (
+            model_family == "minimax_h3_hyperflow_local"
+            and not custom_workflow
+            and not inputs.get("checkpoint_name")
+            and not resume_id
+        ):
+            return ToolResult(
+                success=False,
+                data={
+                    "provider": "comfyui",
+                    "model": "MiniMax-H3 HyperFlow",
+                    "setup_required": True,
+                    "workflow_templates": {
+                        "t2v": "tools/_comfyui/workflows/hyperflow_int8_t2v_api.json",
+                        "i2v": "tools/_comfyui/workflows/hyperflow_int8_i2v_api.json",
+                        "flf2v": "tools/_comfyui/workflows/hyperflow_int8_flf2v_api.json",
+                        "ref2v": "tools/_comfyui/workflows/hyperflow_int8_ref2v_api.json",
+                    },
+                    "model_stack": BUNDLED_MODEL_STACKS["minimax-h3-hyperflow-local"],
+                },
+                error=(
+                    "minimax_h3_hyperflow_local requires checkpoint_name or an API-format "
+                    "workflow via workflow_json/workflow_path plus output_node."
                 ),
             )
         if (
@@ -766,6 +794,8 @@ class ComfyUIVideo(BaseTool):
             return inputs.get("workflow_model") or "LTX-2.5 (local ComfyUI workflow)"
         if str(inputs.get("model_family")) == "minimax_h3_local":
             return inputs.get("workflow_model") or "MiniMax-H3 (local ComfyUI workflow)"
+        if str(inputs.get("model_family")) == "minimax_h3_hyperflow_local":
+            return inputs.get("workflow_model") or "MiniMax-H3 HyperFlow (local ComfyUI workflow)"
         return (
             inputs.get("workflow_model")
             or inputs.get("model")
@@ -814,7 +844,11 @@ class ComfyUIVideo(BaseTool):
                 "model_stack": model_stack(workflow_key, inputs),
                 "output_node": output_node,
             }
-        local_h3 = model_family == "minimax_h3_local"
+        local_h3_stack = {
+            "minimax_h3_local": "minimax-h3-local",
+            "minimax_h3_hyperflow_local": "minimax-h3-hyperflow-local",
+        }.get(model_family)
+        local_h3 = local_h3_stack is not None
         return {
             "source": "user_supplied",
             **custom_input_provenance(inputs),
@@ -823,8 +857,8 @@ class ComfyUIVideo(BaseTool):
             "model": inputs.get("workflow_model") or inputs.get("model"),
             "workflow_hash_sha256": workflow_hash(workflow),
             "model_stack": (
-                BUNDLED_MODEL_STACKS["minimax-h3-local"]
-                if local_h3 and not inputs.get("workflow_model_stack")
+                BUNDLED_MODEL_STACKS[local_h3_stack]
+                if local_h3_stack and not inputs.get("workflow_model_stack")
                 else model_stack(None, inputs)
             ),
             "model_stack_source": (

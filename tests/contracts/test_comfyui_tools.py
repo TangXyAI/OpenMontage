@@ -1678,3 +1678,21 @@ class TestComfyUITiming:
         assert timing["comfy_prompt_exec_s"] == 120.0
         assert timing["client_queue_and_poll_s"] == 30.0
         assert timing["wall_s"] >= timing["client_overhead_s"] >= 0
+
+
+def test_hyperflow_family_is_declared():
+    tool = ComfyUIVideo()
+    assert "minimax_h3_hyperflow_local" in tool.input_schema["properties"]["model_family"]["enum"]
+    assert "hyperflow-h3" in tool.agent_skills
+
+
+def test_hyperflow_family_requires_a_workflow():
+    result = ComfyUIVideo().execute({
+        "prompt": "a rain-soaked alley",
+        "model_family": "minimax_h3_hyperflow_local",
+        "output_path": "out.mp4",
+    })
+    assert not result.success
+    assert result.data["setup_required"] is True
+    names = {item["name"] for item in result.data["model_stack"]}
+    assert "minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf" in names

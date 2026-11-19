@@ -67,6 +67,51 @@ BUNDLED_MODEL_STACKS: dict[str, list[dict[str, Any]]] = {
             "download_url": "https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/vae",
         },
     ],
+    "minimax-h3-hyperflow-local": [
+        {
+            "role": "diffusion_model",
+            "name": "minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf",
+            "quantization": "Q4_K_M GGUF",
+            "destination_hint": "ComfyUI/models/diffusion_models/",
+            "download_url": (
+                "https://modelscope.cn/models/VideoRebirthAI/hyperflow-h3-flash"
+            ),
+        },
+        {
+            "role": "diffusion_model",
+            "name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+            "quantization": "Q4_K_M GGUF",
+            "destination_hint": "ComfyUI/models/diffusion_models/",
+            "download_url": (
+                "https://modelscope.cn/models/VideoRebirthAI/hyperflow-h3-flash"
+            ),
+        },
+        {
+            "role": "text_encoder",
+            "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+            "quantization": "NVFP4 AWQ",
+            "destination_hint": "ComfyUI/models/text_encoders/",
+            "download_url": "https://modelscope.cn/models/Comfy-Org/MiniMax-H3",
+        },
+        {
+            "role": "video_vae",
+            "name": "minimax_h3_video_vae_fp16.safetensors",
+            "destination_hint": "ComfyUI/models/vae/",
+            "download_url": "https://modelscope.cn/models/Comfy-Org/MiniMax-H3",
+        },
+        {
+            "role": "audio_vae",
+            "name": "minimax_h3_audio_vae_fp32.safetensors",
+            "destination_hint": "ComfyUI/models/vae/",
+            "download_url": "https://modelscope.cn/models/Comfy-Org/MiniMax-H3",
+        },
+        {
+            "role": "vae",
+            "name": "minimax_h3_sol_vae_int8_convrot.safetensors",
+            "destination_hint": "ComfyUI/models/vae/",
+            "download_url": "https://modelscope.cn/models/Comfy-Org/MiniMax-H3",
+        },
+    ],
     "flux2-txt2img": [
         {
             "role": "diffusion_model",
