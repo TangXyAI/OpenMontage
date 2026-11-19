@@ -780,6 +780,7 @@ def test_hyperflow_t2v_binds_prompt_seed_dimensions_and_steps():
         "prompt": "a wet alley", "seed": 7, "width": 960, "height": 544,
         "num_frames": 73, "steps": 6, "operation": "text_to_video",
         "model_family": "minimax_h3_hyperflow_local",
+        "checkpoint_name": "minimax_h3_fl2va_hyperflow_flash_14b-int8_convrot.safetensors",
         "output_path": str(Path(tempfile.mkdtemp()) / "out.mp4"),
     })
     assert result.success, result.error
@@ -808,6 +809,7 @@ def test_hyperflow_ref2v_binds_two_reference_images():
     result = tool.execute({
         "prompt": "hero in the alley", "operation": "reference_to_video",
         "model_family": "minimax_h3_hyperflow_local",
+        "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-int8_convrot.safetensors",
         "reference_image_paths": [str(tmp / "hero.png"), str(tmp / "place.png")],
         "output_path": str(tmp / "out.mp4"),
     })
