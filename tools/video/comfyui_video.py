@@ -123,6 +123,7 @@ class ComfyUIVideo(BaseTool):
         "minimax-h3",
         "ai-video-gen",
         "ltx2",
+        "hyperflow-h3",
     ]
 
     capabilities = ["text_to_video", "image_to_video"]

@@ -8,6 +8,8 @@ class GeminiFalImage(FalMedia):
     capability = "image_generation"
     capabilities = ["text_to_image", "image_edit"]
     supports = {"image_edit": True, "multiple_reference_images": True}
+    # Keep the pointer inherited from FalMedia; add the Lira prompt guidance.
+    agent_skills = ["provider-model-refresh", "lira-image-prompts"]
     best_for = ["Gemini 3 Pro Image with an existing fal account"]
     routes = {
         "gemini-3-pro-image": {

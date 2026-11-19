@@ -36,7 +36,7 @@ class SeedreamImage(BaseTool):
         "Set FAL_KEY to your fal.ai API key.\n"
         "  Get one at https://fal.ai/dashboard/keys"
     )
-    agent_skills = ["visual-style"]
+    agent_skills = ["visual-style", "lira-image-prompts"]
 
     capabilities = [
         "generate_image",

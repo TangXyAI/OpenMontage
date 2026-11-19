@@ -33,6 +33,9 @@ class VideoSelector(BaseTool):
         "ltx2",
         "gemini-omni",
         "atlas-cloud",
+        "cinedance",
+        "acting-system",
+        "hyperflow-h3",
     ]
 
     # Operations that REQUIRE motion: an image-only tool (image_selector) is not

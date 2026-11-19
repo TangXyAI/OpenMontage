@@ -40,7 +40,7 @@ class OpenAIImage(BaseTool):
     install_instructions = (
         "Set OPENAI_API_KEY to your OpenAI API key.\n  pip install openai"
     )
-    agent_skills = ["provider-model-refresh"]  # general image gen knowledge
+    agent_skills = ["provider-model-refresh", "lira-image-prompts"]  # general image gen knowledge
 
     capabilities = ["generate_image", "generate_illustration", "text_to_image"]
     supports = {
