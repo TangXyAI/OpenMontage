@@ -41,8 +41,8 @@ class VideoSelector(BaseTool):
     # Operations that REQUIRE motion: an image-only tool (image_selector) is not
     # an acceptable last-resort fallback for these, so fallback_tools_for() drops it.
     MOTION_REQUIRED_OPERATIONS = frozenset(
-        {"image_to_video", "reference_to_video", "video_edit",
-         "video_to_video_edit", "video_to_video_reference"}
+        {"image_to_video", "first_last_frame_to_video", "reference_to_video",
+         "video_edit", "video_to_video_edit", "video_to_video_reference"}
     )
     # Default score gap for the preferred_provider override (see input_schema).
     PREFERRED_PROVIDER_GAP = 0.15
@@ -658,6 +658,12 @@ class VideoSelector(BaseTool):
                     supports.get("reference_to_video")
                     or "reference_image_urls" in props
                 ):
+                    matched_operation = True
+                    filtered.append(tool)
+                continue
+
+            if operation == "first_last_frame_to_video":
+                if supports.get("first_last_frame_to_video"):
                     matched_operation = True
                     filtered.append(tool)
                 continue
