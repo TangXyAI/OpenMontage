@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openmontage/artifacts/shot_spec",
+  "title": "Shot Spec",
+  "description": "Model-neutral shot specification produced by the scene and asset directors. Provider-specific parameters are not allowed here; provider choices belong in the asset manifest.",
+  "type": "object",
+  "required": ["version", "shots"],
+  "properties": {
+    "version": { "type": "string", "const": "1.0" },
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "shot_id",
+          "scene_id",
+          "duration_seconds",
+          "scene_context",
+          "references",
+          "location_map",
+          "first_frame",
+          "format_mode",
+          "optics",
+          "camera",
+          "action_timing",
+          "physics",
+          "lighting",
+          "audio",
+          "character_acting",
+          "style",
+          "quality",
+          "constraints"
+        ],
+        "properties": {
+          "shot_id": { "type": "string", "description": "Stable identifier for this shot" },
+          "scene_id": { "type": "string", "description": "Identifier of the scene this shot belongs to" },
+          "duration_seconds": { "type": "number", "exclusiveMinimum": 0 },
+          "scene_context": { "type": "string", "description": "What is happening in the scene and why" },
+          "references": {
+            "type": "array",
+            "description": "Model-neutral reference assets grounded to this shot",
+            "items": {
+              "type": "object",
+              "required": ["asset_id", "kind", "path", "role"],
+              "properties": {
+                "asset_id": { "type": "string" },
+                "kind": { "type": "string", "enum": ["image", "video", "audio"] },
+                "path": { "type": "string" },
+                "role": { "type": "string", "description": "How the reference is used, e.g. identity or style" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "location_map": { "type": "string", "description": "Spatial layout of the set and camera-relative positions" },
+          "first_frame": { "type": "string", "description": "What the opening frame shows" },
+          "format_mode": { "type": "string", "description": "Take structure, e.g. single take or montage" },
+          "optics": { "type": "string", "description": "Field of view, lens character, and focus behavior" },
+          "camera": { "type": "string", "description": "Camera support and movement" },
+          "action_timing": { "type": "string", "description": "Beat-by-beat action with timestamps" },
+          "physics": { "type": "string", "description": "Physical behavior of bodies, materials, and effects" },
+          "lighting": { "type": "string", "description": "Light sources, quality, direction, and mood" },
+          "audio": { "type": "string", "description": "Diegetic sound, dialogue, and music policy" },
+          "character_acting": { "type": "string", "description": "Objective, obstacle, and performance notes" },
+          "style": { "type": "string", "description": "Look and rendering style" },
+          "quality": { "type": "string", "description": "Acceptance bar for the shot" },
+          "constraints": { "type": "string", "description": "Hard limits and forbidden elements" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
