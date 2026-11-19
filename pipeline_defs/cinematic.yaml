@@ -48,6 +48,8 @@ required_skills:
   - meta/reviewer
   - meta/checkpoint-protocol
   - meta/animation-runtime-selector
+  - creative/narrative-consistency
+  - creative/video-model-selection
 
 production_modes:
   - name: source_led
@@ -55,7 +57,7 @@ production_modes:
   - name: narrative_generated
     description: Character-led narrative in which generated shots may carry the story.
     required_tools: [image_selector, video_selector]
-    agent_skills: [comfyui, minimax-h3]
+    agent_skills: [hyperflow-h3, minimax-h3, cinedance, acting-system, lira-image-prompts, comfyui]
 
 compatible_playbooks:
   recommended:
@@ -210,9 +212,19 @@ stages:
       - Source-led inserts are justified; narrative-generated shots may carry the story
       - Explicit 3D worlds preserve one coherent scene graph across global, regional, and walk views
       - Hero 3D worlds use the production fidelity tier with licensed textured models and PBR terrain layers; primitive-only blockouts cannot pass
+      - Asset sheets are approved before any batch take generation
+      - The user selected the model family and route before the first generation
     success_criteria:
       - Schema-valid asset_manifest artifact
       - All referenced asset files exist on disk
+    sub_stages:
+      - name: asset_sheets
+        description: "Character, location, and prop sheets approved before batch take generation"
+        human_approval_default: true
+      - name: model_selection
+        description: "User selects the video model family and route before the first generation"
+        human_approval_default: true
+        tools_available: [video_selector]
 
   - name: edit
     skill: pipelines/cinematic/edit-director
