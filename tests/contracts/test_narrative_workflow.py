@@ -1,4 +1,5 @@
 import json
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -193,3 +194,103 @@ def test_custom_workflow_reports_requested_inputs_as_unbound(tool_class, tmp_pat
     assert result.success, result.error
     assert result.data["workflow_provenance"]["input_bindings"] == []
     assert result.data["workflow_provenance"]["requested_parameters_applied"] is False
+
+
+def test_hyperflow_t2v_binds_prompt_seed_dimensions_and_steps():
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    captured = {}
+
+    def generate(workflow, output_node, dest, **kwargs):
+        captured.update(workflow)
+        Path(dest).write_bytes(b"result")
+        return [Path(dest)]
+
+    tool._client.generate = generate
+    result = tool.execute({
+        "prompt": "a wet alley", "seed": 7, "width": 960, "height": 544,
+        "num_frames": 73, "steps": 6, "operation": "text_to_video",
+        "model_family": "minimax_h3_hyperflow_local",
+        "checkpoint_name": "minimax_h3_fl2va_hyperflow_flash_14b-int8_convrot.safetensors",
+        "output_path": str(Path(tempfile.mkdtemp()) / "out.mp4"),
+    })
+    assert result.success, result.error
+    assert captured["5"]["inputs"]["prompt"] == "a wet alley"
+    assert captured["8"]["inputs"]["noise_seed"] == 7
+    assert captured["5"]["inputs"]["width"] == 960
+    assert captured["5"]["inputs"]["length"] == 73
+    assert captured["6"]["inputs"]["steps"] == 6
+
+
+def test_hyperflow_ref2v_binds_two_reference_images():
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    tool._client.upload_image = lambda path, name: "remote-" + Path(path).name
+    captured = {}
+
+    def generate(workflow, output_node, dest, **kwargs):
+        captured.update(workflow)
+        Path(dest).write_bytes(b"result")
+        return [Path(dest)]
+
+    tool._client.generate = generate
+    tmp = Path(tempfile.mkdtemp())
+    for name in ("hero.png", "place.png"):
+        (tmp / name).write_bytes(b"image")
+    result = tool.execute({
+        "prompt": "hero in the alley", "operation": "reference_to_video",
+        "model_family": "minimax_h3_hyperflow_local",
+        "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-int8_convrot.safetensors",
+        "reference_image_paths": [str(tmp / "hero.png"), str(tmp / "place.png")],
+        "output_path": str(tmp / "out.mp4"),
+    })
+    assert result.success, result.error
+    assert captured["20"]["inputs"]["image"] == "remote-hero.png"
+    assert captured["21"]["inputs"]["image"] == "remote-place.png"
+
+
+def test_hyperflow_official_int8_switches_to_official_loader():
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    captured = {}
+
+    def generate(workflow, output_node, dest, **kwargs):
+        captured.update(workflow)
+        Path(dest).write_bytes(b"result")
+        return [Path(dest)]
+
+    tool._client.generate = generate
+    result = tool.execute({
+        "prompt": "a wet alley", "operation": "text_to_video",
+        "model_family": "minimax_h3_hyperflow_local",
+        "checkpoint_name": "minimax_h3_fl2va_hyperflow_flash_14b-int8_convrot.safetensors",
+        "loader": "auto",
+        "output_path": str(Path(tempfile.mkdtemp()) / "out.mp4"),
+    })
+    assert result.success, result.error
+    assert captured["1"]["class_type"] == "HyperFlowLoader"
+    assert captured["1"]["inputs"]["unet_name"].endswith("14b-int8_convrot.safetensors")
+    assert "patcher" not in captured["1"]["inputs"]
+
+
+def test_hyperflow_gguf_switches_to_gguf_loader():
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    captured = {}
+
+    def generate(workflow, output_node, dest, **kwargs):
+        captured.update(workflow)
+        Path(dest).write_bytes(b"result")
+        return [Path(dest)]
+
+    tool._client.generate = generate
+    result = tool.execute({
+        "prompt": "a wet alley", "operation": "text_to_video",
+        "model_family": "minimax_h3_hyperflow_local",
+        "checkpoint_name": "minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf",
+        "loader": "auto",
+        "output_path": str(Path(tempfile.mkdtemp()) / "out.mp4"),
+    })
+    assert result.success, result.error
+    assert captured["1"]["class_type"] == "HyperFlowGGUFLoader"
+    assert captured["1"]["inputs"]["unet_name"].endswith("Q4_K_M.gguf")

@@ -7,6 +7,7 @@ via the ``workflow_json`` input.
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 from pathlib import Path
@@ -42,6 +43,16 @@ _WORKFLOWS = Path(__file__).resolve().parent.parent / "_comfyui" / "workflows"
 # Output node IDs in the bundled workflows
 _T2V_OUTPUT_NODE = "16"
 _I2V_OUTPUT_NODE = "108"
+
+# Bundled HyperFlow H3 API workflows, one per supported operation.  The
+# `14` SaveVideo node is shared by all four and is the output node.
+_HYPERFLOW_WORKFLOWS = {
+    "text_to_video": "hyperflow_int8_t2v_api.json",
+    "image_to_video": "hyperflow_int8_i2v_api.json",
+    "first_last_frame_to_video": "hyperflow_int8_flf2v_api.json",
+    "reference_to_video": "hyperflow_int8_ref2v_api.json",
+}
+_HYPERFLOW_OUTPUT_NODE = "14"
 
 # Models required by the bundled WAN 2.2 workflows
 _REQUIRED_MODELS_COMMON = [
@@ -165,7 +176,12 @@ class ComfyUIVideo(BaseTool):
             },
             "operation": {
                 "type": "string",
-                "enum": ["text_to_video", "image_to_video"],
+                "enum": [
+                    "text_to_video",
+                    "image_to_video",
+                    "first_last_frame_to_video",
+                    "reference_to_video",
+                ],
                 "default": "text_to_video",
             },
             "model_family": {
@@ -195,6 +211,52 @@ class ComfyUIVideo(BaseTool):
             "reference_image_url": {
                 "type": "string",
                 "description": "URL of reference image (for image_to_video, downloaded first)",
+            },
+            "first_frame_image_path": {
+                "type": "string",
+                "description": (
+                    "Local first-frame image for first_last_frame_to_video "
+                    "(HyperFlow H3 local)"
+                ),
+            },
+            "last_frame_image_path": {
+                "type": "string",
+                "description": (
+                    "Local last-frame image for first_last_frame_to_video "
+                    "(HyperFlow H3 local)"
+                ),
+            },
+            "reference_image_paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 2,
+                "description": (
+                    "Two local reference images for reference_to_video "
+                    "(HyperFlow H3 local): first binds ref_image_0, second ref_image_1."
+                ),
+            },
+            "checkpoint_name": {
+                "type": "string",
+                "description": (
+                    "Exact diffusion model filename in ComfyUI's diffusion_models/ "
+                    "folder (HyperFlow H3 local). The loader is inferred from it."
+                ),
+            },
+            "loader": {
+                "type": "string",
+                "enum": ["auto", "official_int8", "community_int8", "gguf"],
+                "default": "auto",
+                "description": (
+                    "HyperFlow H3 loader class. auto infers from checkpoint_name; "
+                    "official_int8 uses HyperFlowLoader, community_int8 uses "
+                    "HyperFlowINT8Loader, gguf uses HyperFlowGGUFLoader."
+                ),
+            },
+            "steps": {
+                "type": "integer",
+                "enum": [4, 6, 8],
+                "default": 6,
+                "description": "HyperFlow H3 sampling steps (4, 6, or 8).",
             },
             "width": {
                 "type": "integer",
@@ -541,6 +603,7 @@ class ComfyUIVideo(BaseTool):
             inputs.get("output_path", f"comfyui_video_{operation}_{seed}.mp4")
         )
 
+        hyperflow_meta: dict[str, Any] = {}
         try:
             if resume_id:
                 output_node = str(inputs.get("output_node") or resume_context.get("output_node") or "")
@@ -566,6 +629,10 @@ class ComfyUIVideo(BaseTool):
                 workflow, output_node = self._build_partner_t2v(
                     inputs, seed, output_path, model_family
                 )
+            elif model_family == "minimax_h3_hyperflow_local":
+                workflow, output_node, hyperflow_meta = self._build_hyperflow(
+                    inputs, seed, output_path
+                )
             elif operation == "image_to_video":
                 workflow, output_node = self._build_i2v(inputs, seed, output_path)
             else:
@@ -574,6 +641,8 @@ class ComfyUIVideo(BaseTool):
             provenance = (resume_context.get("workflow_provenance") or {"source": "unknown_resumed_task", "prompt_id": resume_id, "output_node": output_node}
                           if resume_id else self._workflow_provenance(
                               inputs, custom_workflow, output_node, operation, workflow, model_family))
+            if hyperflow_meta:
+                provenance.update(hyperflow_meta)
             paths = self._client.generate(
                 workflow,
                 output_node=output_node,
@@ -633,9 +702,14 @@ class ComfyUIVideo(BaseTool):
                 }
             )
         elif not resume_id:
-            width = inputs.get("width", 832 if operation == "text_to_video" else 640)
-            height = inputs.get("height", 480 if operation == "text_to_video" else 640)
-            num_frames = inputs.get("num_frames", 81)
+            if model_family == "minimax_h3_hyperflow_local":
+                width = inputs.get("width", 960)
+                height = inputs.get("height", 544)
+                num_frames = inputs.get("num_frames", 73)
+            else:
+                width = inputs.get("width", 832 if operation == "text_to_video" else 640)
+                height = inputs.get("height", 480 if operation == "text_to_video" else 640)
+                num_frames = inputs.get("num_frames", 81)
             result_data.update(
                 {
                     "width": width,
@@ -746,6 +820,119 @@ class ComfyUIVideo(BaseTool):
         return workflow, _I2V_OUTPUT_NODE
 
     @staticmethod
+    def _normalize_hyperflow_loader(
+        workflow: dict, checkpoint_name: str | None, loader: str
+    ) -> dict:
+        """Patch node 1 to the loader class that matches ``checkpoint_name``.
+
+        The bundled API workflows ship with the community ``HyperFlowINT8Loader``
+        and the BennyDaBall INT8 filenames. A user may instead point
+        ``checkpoint_name`` at the official INT8 file or a GGUF quant, so the
+        loader class and its inputs must be rewritten before submission.
+        """
+        name = str(checkpoint_name or "")
+        lowered = name.lower()
+        loader = str(loader or "auto").lower()
+
+        if loader == "gguf" or lowered.endswith(".gguf") or ".gguf" in lowered:
+            class_type = "HyperFlowGGUFLoader"
+            inputs: dict[str, Any] = {"unet_name": name, "weights_in": "auto"}
+        elif loader == "official_int8" or "14b-int8_convrot" in lowered:
+            class_type = "HyperFlowLoader"
+            inputs = {"unet_name": name}
+        else:
+            class_type = "HyperFlowINT8Loader"
+            inputs = {"unet_name": name, "patcher": "legacy"}
+
+        normalized = copy.deepcopy(workflow)
+        if "1" not in normalized:
+            raise ValueError("HyperFlow workflow is missing loader node 1")
+        normalized["1"]["class_type"] = class_type
+        normalized["1"]["inputs"] = inputs
+        return normalized
+
+    def _build_hyperflow(
+        self, inputs: dict[str, Any], seed: int, output_path: Path
+    ) -> tuple[dict, str, dict]:
+        """Build a bundled HyperFlow H3 workflow and bind its inputs.
+
+        Returns ``(workflow, output_node, metadata)`` where ``metadata`` holds
+        the selected loader/checkpoint for provenance.
+        """
+        operation = str(inputs.get("operation", "text_to_video"))
+        workflow_file = _HYPERFLOW_WORKFLOWS.get(operation)
+        if workflow_file is None:
+            raise ValueError(
+                f"minimax_h3_hyperflow_local does not support operation {operation!r}"
+            )
+        checkpoint_name = inputs.get("checkpoint_name")
+        if not checkpoint_name:
+            raise ValueError("minimax_h3_hyperflow_local requires checkpoint_name")
+        loader = str(inputs.get("loader", "auto"))
+
+        workflow = ComfyUIClient.load_workflow(_WORKFLOWS / workflow_file)
+        workflow = self._normalize_hyperflow_loader(workflow, checkpoint_name, loader)
+
+        bindings: dict[str, list[dict[str, str]]] = {
+            "prompt": [{"node": "5", "input": "prompt"}],
+            "width": [{"node": "5", "input": "width"}],
+            "height": [{"node": "5", "input": "height"}],
+            "num_frames": [{"node": "5", "input": "length"}],
+            "steps": [{"node": "6", "input": "steps"}],
+            "seed": [{"node": "8", "input": "noise_seed"}],
+            "filename_prefix": [{"node": "14", "input": "filename_prefix"}],
+        }
+        values: dict[str, Any] = {
+            "prompt": inputs["prompt"],
+            "width": inputs.get("width", 960),
+            "height": inputs.get("height", 544),
+            "num_frames": inputs.get("num_frames", 73),
+            "steps": inputs.get("steps", 6),
+            "seed": seed,
+            "filename_prefix": output_path.stem,
+        }
+
+        if operation == "image_to_video":
+            reference = inputs.get("reference_image_path") or inputs.get("first_frame_image_path")
+            if not reference:
+                raise ValueError(
+                    "image_to_video requires reference_image_path or first_frame_image_path"
+                )
+            bindings["reference_image_path"] = [{"node": "20", "input": "image"}]
+            values["reference_image_path"] = reference
+        elif operation == "first_last_frame_to_video":
+            first = inputs.get("first_frame_image_path")
+            last = inputs.get("last_frame_image_path")
+            if not (first and last):
+                raise ValueError(
+                    "first_last_frame_to_video requires first_frame_image_path and "
+                    "last_frame_image_path"
+                )
+            bindings["reference_images.first_frame"] = [{"node": "20", "input": "image"}]
+            bindings["reference_images.last_frame"] = [{"node": "21", "input": "image"}]
+            values["reference_images"] = {"first_frame": first, "last_frame": last}
+        elif operation == "reference_to_video":
+            references = inputs.get("reference_image_paths") or []
+            if len(references) < 2:
+                raise ValueError(
+                    "reference_to_video requires two reference_image_paths"
+                )
+            bindings["reference_images.ref_image_0"] = [{"node": "20", "input": "image"}]
+            bindings["reference_images.ref_image_1"] = [{"node": "21", "input": "image"}]
+            values["reference_images"] = {
+                "ref_image_0": references[0],
+                "ref_image_1": references[1],
+            }
+
+        workflow = self._client.bind_workflow(workflow, bindings, values)
+        metadata = {
+            "workflow": workflow_file,
+            "checkpoint_name": checkpoint_name,
+            "loader": workflow["1"]["class_type"],
+        }
+        return workflow, _HYPERFLOW_OUTPUT_NODE, metadata
+
+    @staticmethod
     def _probe_media(path: Path) -> dict[str, Any]:
         """Measure the downloaded clip instead of trusting the request.
 
@@ -783,18 +970,21 @@ class ComfyUIVideo(BaseTool):
 
     @staticmethod
     def _model_name(inputs: dict[str, Any], custom_workflow: bool) -> str:
+        family = str(inputs.get("model_family", "wan2.2"))
         if not custom_workflow:
+            if family == "minimax_h3_hyperflow_local":
+                return inputs.get("workflow_model") or "MiniMax-H3 HyperFlow (local ComfyUI workflow)"
             return {
                 "wan2.2": "wan2.2-14b-fp8-4step",
                 "gemini_omni_flash": "gemini-omni-flash-preview (ComfyUI Partner Node)",
                 "seedance_2.5": "Seedance 2.5 (ComfyUI Partner Node)",
                 "minimax_h3_api": "MiniMax-H3 (ComfyUI Partner Node)",
-            }.get(str(inputs.get("model_family", "wan2.2")), "custom-comfyui-model")
-        if str(inputs.get("model_family")) == "ltx_2.5_local":
+            }.get(family, "custom-comfyui-model")
+        if family == "ltx_2.5_local":
             return inputs.get("workflow_model") or "LTX-2.5 (local ComfyUI workflow)"
-        if str(inputs.get("model_family")) == "minimax_h3_local":
+        if family == "minimax_h3_local":
             return inputs.get("workflow_model") or "MiniMax-H3 (local ComfyUI workflow)"
-        if str(inputs.get("model_family")) == "minimax_h3_hyperflow_local":
+        if family == "minimax_h3_hyperflow_local":
             return inputs.get("workflow_model") or "MiniMax-H3 HyperFlow (local ComfyUI workflow)"
         return (
             inputs.get("workflow_model")
@@ -825,6 +1015,15 @@ class ComfyUIVideo(BaseTool):
                 "network_required": True,
                 "billing": "ComfyUI Partner Node credits",
                 "workflow_hash_sha256": workflow_hash(workflow),
+                "output_node": output_node,
+            }
+        if not custom_workflow and model_family == "minimax_h3_hyperflow_local":
+            return {
+                "source": "bundled",
+                "workflow": _HYPERFLOW_WORKFLOWS.get(operation),
+                "workflow_hash_sha256": workflow_hash(workflow),
+                "model_stack": BUNDLED_MODEL_STACKS["minimax-h3-hyperflow-local"],
+                "model": inputs.get("checkpoint_name"),
                 "output_node": output_node,
             }
         if not custom_workflow:
