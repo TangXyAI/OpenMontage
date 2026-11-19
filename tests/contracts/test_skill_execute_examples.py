@@ -19,6 +19,10 @@ from tools.tool_registry import registry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOC_GLOBS = ("skills/**/*.md", "docs/**/*.md", "*.md")
+# Plan documents quote test snippets (``tool.execute({...})``) as examples of
+# the *test*, not as skill invocation examples.  Scanning them parses a call
+# on a tool named "tool" and fails.  Keep the exclusion narrow: only plan docs.
+EXCLUDED_DOC_PREFIXES = ("docs/superpowers/plans/",)
 # tool_name.execute({ | ToolClass().execute({ | registry.get("tool_name").execute({
 _CALL_RE = re.compile(
     r'(?:registry\.get\(\s*["\'](\w+)["\']\s*\)|\b(\w+)\(\)|\b(\w+))\.execute\(\{'
@@ -66,6 +70,8 @@ def _examples() -> list[tuple[str, str, list[str]]]:
     found = []
     paths = sorted({p for g in DOC_GLOBS for p in REPO_ROOT.glob(g)})
     for path in paths:
+        if path.relative_to(REPO_ROOT).as_posix().startswith(EXCLUDED_DOC_PREFIXES):
+            continue
         text = path.read_text(encoding="utf-8")
         for m in _CALL_RE.finditer(text):
             line = text.count("\n", 0, m.start()) + 1
@@ -81,6 +87,10 @@ EXAMPLES = _examples()
 def test_examples_are_discovered():
     assert len(EXAMPLES) >= 10, "doc scan found too few execute() examples"
     assert all(keys for _, _, keys in EXAMPLES), "an example's keys could not be parsed"
+
+
+def test_plan_docs_are_not_scanned():
+    assert not [where for where, _, _ in EXAMPLES if where.startswith("docs/superpowers/plans/")]
 
 
 @pytest.mark.parametrize(

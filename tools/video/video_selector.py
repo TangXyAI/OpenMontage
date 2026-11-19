@@ -50,6 +50,7 @@ class VideoSelector(BaseTool):
     capabilities = [
         "text_to_video",
         "image_to_video",
+        "first_last_frame_to_video",
         "reference_to_video",
         "video_edit",
         "video_to_video_edit",
@@ -108,6 +109,7 @@ class VideoSelector(BaseTool):
                 "enum": [
                     "text_to_video",
                     "image_to_video",
+                    "first_last_frame_to_video",
                     "reference_to_video",
                     "video_edit",
                     "video_to_video_edit",
@@ -121,6 +123,7 @@ class VideoSelector(BaseTool):
                 "enum": [
                     "text_to_video",
                     "image_to_video",
+                    "first_last_frame_to_video",
                     "reference_to_video",
                     "video_edit",
                     "video_to_video_edit",

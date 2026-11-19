@@ -1331,6 +1331,8 @@ class TestVideoOperationReadiness:
         assert tool.operation_statuses() == {
             "text_to_video": "available",
             "image_to_video": "degraded",
+            "first_last_frame_to_video": "available",
+            "reference_to_video": "available",
         }
 
     def test_video_selector_filters_operation_unready_tools(self):

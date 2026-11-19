@@ -54,6 +54,17 @@ _HYPERFLOW_WORKFLOWS = {
 }
 _HYPERFLOW_OUTPUT_NODE = "14"
 
+# Operations only the bundled HyperFlow H3 family can execute.  Every other
+# family either has no workflow for them (WAN) or is text-to-video only
+# (Partner Nodes), so `execute` rejects them up front instead of silently
+# falling back to text_to_video or failing deep inside a workflow build.
+_HYPERFLOW_ONLY_OPERATIONS = frozenset(
+    {"first_last_frame_to_video", "reference_to_video"}
+)
+
+# Every operation the tool advertises, in workflow-key order.
+_OPERATIONS = tuple(_HYPERFLOW_WORKFLOWS)
+
 # Models required by the bundled WAN 2.2 workflows
 _REQUIRED_MODELS_COMMON = [
     "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
@@ -141,6 +152,8 @@ class ComfyUIVideo(BaseTool):
     supports = {
         "seed": True,
         "reference_image": True,
+        "first_last_frame_to_video": True,
+        "reference_to_video": True,
         "custom_workflow": True,
         "custom_output_node": True,
         "offline": True,
@@ -400,20 +413,25 @@ class ComfyUIVideo(BaseTool):
     def operation_statuses(self) -> dict[str, str]:
         """Return per-operation readiness for selector routing and preflight."""
         if not self._client.is_available():
-            return {
-                "text_to_video": "unavailable",
-                "image_to_video": "unavailable",
-            }
+            return {operation: "unavailable" for operation in _OPERATIONS}
 
         _, missing_t2v = self._client.check_models(_REQUIRED_MODELS_T2V)
         _, missing_i2v = self._client.check_models(_REQUIRED_MODELS_I2V)
-        return {
+        statuses = {
             "text_to_video": "available" if not missing_t2v else "degraded",
             "image_to_video": "available" if not missing_i2v else "degraded",
         }
+        # HyperFlow readiness is bundled-workflow presence, not WAN model
+        # discovery: the caller supplies checkpoint_name and the loader.
+        for operation in _HYPERFLOW_ONLY_OPERATIONS:
+            workflow_file = _WORKFLOWS / _HYPERFLOW_WORKFLOWS[operation]
+            statuses[operation] = (
+                "available" if workflow_file.is_file() else "degraded"
+            )
+        return statuses
 
     def is_operation_available(self, operation: str) -> bool:
-        if operation not in {"text_to_video", "image_to_video"}:
+        if operation not in _OPERATIONS:
             return False
         return self.operation_statuses().get(operation) == "available"
 
@@ -492,6 +510,20 @@ class ComfyUIVideo(BaseTool):
             inputs.get("workflow_json") or inputs.get("workflow_path")
         )
         model_family = str(inputs.get("model_family", "wan2.2"))
+        requested_operation = inputs.get("operation", "text_to_video")
+        if (
+            requested_operation in _HYPERFLOW_ONLY_OPERATIONS
+            and model_family != "minimax_h3_hyperflow_local"
+        ):
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Operation {requested_operation!r} is only supported by "
+                    "model_family='minimax_h3_hyperflow_local'. "
+                    f"Got model_family={model_family!r}; use the HyperFlow "
+                    "family or choose text_to_video/image_to_video."
+                ),
+            )
         partner_nodes = {
             "gemini_omni_flash": "GeminiVideoOmni",
             "seedance_2.5": "ByteDance2TextToVideoNode",
