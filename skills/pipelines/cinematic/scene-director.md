@@ -57,7 +57,16 @@ Recommended metadata keys:
 - `title_card_rules`
 - `support_insert_rules`
 
-### 5. 5-Aspect Scene-Plan Checklist
+### 5. Declare `required_assets` And `location_map`
+
+Every scene in `scene_plan.scenes[]` must carry two explicit fields before the assets stage can run:
+
+- **`required_assets`** — an array, one entry per asset the scene needs. Each entry names `kind` (`character`, `location`, or `prop`), a stable `descriptor` (the exact identity text the asset sheet will be generated from), and `source` (`existing`, `generate`, or `reference`). For `narrative_generated`, this list is the input to the asset-sheet gate; an asset that is not listed cannot be generated for the shot.
+- **`location_map`** — the scene's spatial contract: locked master angle, named anchor objects (door, window, table, skyline), camera-relative positions, and the single light source and shadow direction. The asset director builds the empty location plate from this map, and every shot in the scene inherits it.
+
+Every shot also needs a stable **shot id** (`shot_id`). The id is the key later stages use for shot specs (`schemas/artifacts/shot_spec.schema.json`), take selection, and edit decisions — a shot without an id cannot be tracked through the assets gate. Use a scene-prefixed form such as `s02-sh03`.
+
+### 6. 5-Aspect Scene-Plan Checklist
 
 > Every scene beat — and especially every hero frame — must specify all five aspects. Cinematic relies on a small number of memorable frames; vague hero-frame specs are the single most common failure mode and produce unpredictable model output. Marking an aspect as N/A is allowed but must be explicit (e.g., "no subject — establishing scenery shot"). Silent omission is forbidden.
 >
@@ -71,8 +80,10 @@ Recommended metadata keys:
 
 > **Overlays callout.** Overlays (titles, subtitles, HUD, watermarks, framing graphics, lower-thirds, name plates, end-tag cards) are NOT part of the scene's foreground/midground/background depth axis. List them separately in scene metadata (`overlays: [...]`) with content and placement. Never describe an overlay as "in the foreground" — that confuses both downstream tools and any video-understanding model that re-analyzes the output.
 
-### 6. Quality Gate
+### 7. Quality Gate
 
+- every scene declares `required_assets` (kind, descriptor, source) and a `location_map`,
+- every shot has a stable `shot_id`,
 - every beat has a scene treatment,
 - hero frames are identifiable AND fully specified across all 5 aspects,
 - support inserts are justified,

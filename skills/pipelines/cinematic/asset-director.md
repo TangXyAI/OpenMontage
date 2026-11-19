@@ -30,6 +30,20 @@ Before authoring title cards, name plates, or SVG overlays, read **`skills/meta/
 | Tools | `subtitle_gen`, `audio_enhance`, `image_selector`, `video_selector`, `pixabay_music` (free, default), `freesound_music` (free), `music_gen` (ElevenLabs, paid) — selectors auto-discover all available providers from the registry. **Default to `pixabay_music` before reaching for `music_gen`.** | Optional support asset creation |
 | Playbook | Active style playbook | Brand and typography consistency |
 
+## Narrative Asset Pipeline — Required Order
+
+For `narrative_generated` productions, work through this chain in order. Each step is a gate: do not advance until the previous step is locked. Read `skills/creative/narrative-consistency.md` first.
+
+1. **Asset sheets.** Generate and approve the descriptor + reference image, the three-panel character sheet (face close-up, front full-body without head, back full-body), the empty location plate from the master angle, and the prop sheets. Record everything under `assets/references/{characters,locations,props}/` and link it with `lib.narrative_assets.NarrativeAssets`. This is the `asset_sheets` sub-stage and requires human approval.
+2. **Stress test.** Run every sheet against the four bars — identity across pose/angle/light, wardrobe constancy, spatial readability, and reusability — before locking it. **A failed stress test returns to asset design**: rewrite the descriptor, regenerate the sheet or plate, retest. Do not try to fix an asset failure with more video takes; the model is not the source of the inconsistency.
+3. **Optional 360° empty-scene sweep.** When coverage needs reverse angles or shot-reverse-shot, generate a slow 360° sweep of the empty location to fill in off-camera space and reduce drift when the camera crosses the axis.
+4. **Video character card.** Turn each locked character sheet into a video character card: a short moving reference clip showing the character turning, blinking, speaking, and moving in the locked wardrobe. The card is the video-model identity anchor — stills alone do not hold identity in motion generation.
+5. **Model and route gate.** Before the first generation call, present the exact batch parameters — model id, resolution, duration, take count, and total cost — and confirm the approved decision with `lib.video_model_selection.require_selected_route(decision_log, route_id)`. This is the `model_selection` sub-stage; no approved route means no generation.
+6. **Shot specs.** Write one model-neutral shot spec per shot and validate it against `schemas/artifacts/shot_spec.schema.json`: `shot_id`, `scene_id`, `duration_seconds`, `scene_context`, `references` (asset id, kind, path, role), `location_map`, `first_frame`, `format_mode`, `optics`, `camera`, `action_timing`, `physics`, `lighting`, `audio`, `character_acting`, `style`, `quality`, and `constraints`. Provider-specific parameters belong in the asset manifest, never in the shot spec.
+7. **Prompt compilation.** Compile each shot spec into the chosen model's prompt dialect — read `.agents/skills/hyperflow-h3/`, `.agents/skills/minimax-h3/`, or the matching Layer 3 skill. Copy the approved descriptor verbatim; add only scene-specific action, framing, and timing. Run the pre/post self-review below before sending anything.
+8. **Batch takes.** Generate inside the **take budget** — **2–4 takes per shot**, drafted at lower resolution within the same family where possible. A weak prompt is not fixed by more takes; if none of them lands, revisit the shot spec or the asset instead of extending the budget silently.
+9. **Selection.** Present the takes to the human at the assets gate, then `select_take` the approved candidate and export `asset_manifest()`.
+
 ## Process
 
 ### Explicit 3D-world path

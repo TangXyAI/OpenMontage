@@ -50,8 +50,19 @@ Recommended metadata keys:
 - `title_card_windows`
 - `reframe_notes`
 
-### 5. Quality Gate
+### 5. Post Passes — Cleanup, Color, and Sound
 
+Cinematic edits get three finishing passes before compose. Record them under `edit_decisions.metadata.post_passes` so compose can verify they ran.
+
+- **Cleanup.** Deflicker exposure and flicker-prone generated clips, stabilise jitter where the move should be locked, remove duplicated or dead frames at take boundaries, fix popped seams between shots, and match grain across mixed sources. Cleanup never changes the editorial order — it only removes artifacts.
+- **Color.** Grade per scene, not per clip: one scene, one look. Match black levels, white balance, and contrast across shots that came from different models or days, then apply the approved LUT or grade profile. Keep faces and text readable; refuse a grade that crushes skin tones or title cards.
+- **Sound.** Balance dialogue/narration, ambience, and music explicitly — dialogue on top, ambience filling the space between cuts, music carrying the arc and dropping out for impact beats. Fix level jumps between scenes, remove clicks and take-boundary noise, and keep quiet moments quiet. No surprise silence and no flattened dynamics.
+
+If a pass is missing or incomplete, do not advance to compose; finish it and renew the edit checkpoint.
+
+### 6. Quality Gate
+
+- all three post passes (cleanup, color, sound) are recorded and complete,
 - the emotional arc is intact,
 - reveals land clearly,
 - title cards are sparse and timed with intent,

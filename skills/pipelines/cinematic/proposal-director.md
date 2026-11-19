@@ -43,6 +43,63 @@ cost, HyperFrames runtime, and atelier mode in the proposal.
 
 A `render_runtime_selection` decision with only one option considered when both were available is a CRITICAL reviewer finding.
 
+## Video model shortlist (local first)
+
+Cinematic generation is model- and route-sensitive: the same shot spec can read as a different film on HyperFlow GGUF, cloud H3, or Seedance 2.5. Lock the video model family and route **at proposal time**, before any generation spend. Read `skills/creative/video-model-selection.md`, `.agents/skills/hyperflow-h3/SKILL.md`, and `.agents/skills/minimax-h3/SKILL.md` before building the menu.
+
+**Do not hardcode routes, statuses, or prices.** Build the live menu from the registry:
+
+```bash
+python -c "
+from tools.tool_registry import registry
+from lib.video_model_selection import build_menu, render_menu
+registry.discover()
+menu = build_menu(registry, duration=5)
+print(render_menu(menu))
+"
+```
+
+`lib.video_model_selection.build_menu` returns the fixed catalog ordered **local first** — HyperFlow GGUF → HyperFlow INT8 → H3 local → cloud H3 → Seedance 2.5 → Pika H3 Flex — with `route_id`, `family`, `route`, `tool`, `model`, `operations`, `available`/`status`, `cost_5s`, and `setup` hints for unavailable tools.
+
+When any local route is a candidate (`hyperflow_gguf`, `hyperflow_int8`, `h3_local`), check the machine before offering it:
+
+```python
+from lib.local_video_readiness import check_hyperflow_readiness
+result = check_hyperflow_readiness(comfyui_root, model_roots, server_running=...)
+```
+
+Show `result["blockers"]` verbatim as missing weights, node packs, or server state — never silently omit an unavailable local route — and report `result["warnings"]` as optional. Surface the HyperFlow weight license note wherever a HyperFlow route appears.
+
+**Present the video model shortlist to the user:**
+
+1. Local routes first, with availability status, the 5-second cost reported by `build_menu` (`cost_5s`), and any readiness blockers.
+2. Cloud routes after, with the same fields; flag the cheapest draft route.
+3. A recommendation tied to the brief's `delivery_promise` and approved budget, plus a backup route.
+4. Wait for explicit approval — "the agent picked something" is not a selection.
+
+**Record the choice before leaving proposal.** Write `proposal_packet.metadata.video_model_shortlist` (the menu rows the user saw) and `proposal_packet.metadata.selected_route` (the approved `route_id`), then append the decision with `record_selection` under `category: "provider_selection"`, `subject: "Video model and route"`:
+
+```python
+from lib.video_model_selection import record_selection
+record_selection(
+    "projects/<project-id>/decision_log.json",
+    project_id="<project-id>",
+    stage="proposal",
+    route={"route_id": selected_route},
+    options=[
+        {
+            "option_id": row["route_id"],
+            "label": f"{row['family']} — {row['route']}",
+            "reason": row["notes"],
+        }
+        for row in shortlist
+    ],
+    reason="<why this route; local first where it is ready>",
+)
+```
+
+`video_selector` only discovers and preflights. Execute with the explicit tool and model id the user chose. A later route change (local → cloud, or cross-family) is a new approval and a new `record_selection` entry, and `require_selected_route` must pass before the assets stage generates anything.
+
 ## Prerequisites
 
 | Layer | Resource | Purpose |

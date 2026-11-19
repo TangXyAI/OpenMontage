@@ -76,6 +76,16 @@ print('Remotion note:', info.get('remotion_note'))
 
 If Remotion is not in the available render engines, stop and report to the user per the Decision Communication Contract. Do not substitute a reduced-fidelity render path without approval.
 
+### 0b. Run The Three Post Passes (Cleanup, Color, Sound)
+
+The edit director performs three finishing passes and records them under `edit_decisions.metadata.post_passes`. Confirm all three are present and complete before the final render:
+
+- **Cleanup** — deflicker, stabilise, remove dead or duplicate frames, and match grain across sources. Missing cleanup surfaces as flicker and seams in the render.
+- **Color** — per-scene grade, matched black level and white balance, approved LUT or grade profile. Do not let the render add a second, conflicting grade.
+- **Sound** — dialogue/narration, ambience, and music balanced; level jumps and clicks removed; quiet moments preserved.
+
+If a pass is missing, return to the edit stage, finish it, and renew the edit checkpoint before rendering. These passes never change `render_runtime`: the runtime locked in `proposal_packet.production_plan.render_runtime` and carried in `edit_decisions.render_runtime` still governs the render, and a silent swap remains a critical governance violation.
+
 ### 1. Use Frame Treatment Deliberately
 
 Only use letterbox, 24fps intent, or heavy grading if they help the piece. Do not apply them because the pipeline name says cinematic.
