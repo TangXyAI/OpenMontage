@@ -9,9 +9,28 @@ import json
 import hashlib
 import os
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+
+def validate_character_sheet(descriptor: str, sheet_paths: Sequence[str | Path]) -> None:
+    """Validate the three-image character sheet required before locking an asset.
+
+    Hell-Grind requires a non-empty descriptor and exactly three reference
+    images (face close-up, front full-body without head, back full-body). Only
+    paths are checked; image contents are never read and no catalog state is
+    touched.
+    """
+    if not descriptor or not descriptor.strip():
+        raise ValueError("Character sheet needs a non-empty descriptor")
+    paths = [Path(path) for path in sheet_paths]
+    if len(paths) != 3:
+        raise ValueError(f"Character sheet needs exactly three images, got {len(paths)}")
+    missing = [str(path) for path in paths if not path.is_file()]
+    if missing:
+        raise ValueError("Character sheet is missing image files: " + ", ".join(missing))
 
 
 class NarrativeAssets:
