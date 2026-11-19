@@ -913,6 +913,83 @@ git commit -m "feat(comfyui): 支持 HyperFlow 的四种输入模式"
 
 ---
 
+### Task 9.5: Close the HyperFlow selector and scanner gaps
+
+**Why:** Task 9's review found two end-to-end gaps: the new operations are not reachable through `VideoSelector`, and the execute-example scanner reads the plan document itself, producing four false failures. This task closes both before the branch is reviewed.
+
+**Files:**
+- Modify: `tests/contracts/test_skill_execute_examples.py`
+- Modify: `tools/video/comfyui_video.py`
+- Modify: `tools/video/video_selector.py`
+- Modify: `tests/contracts/test_comfyui_tools.py`
+- Test: `tests/contracts/test_hyperflow_selector.py`
+
+**Interfaces:**
+- `ComfyUIVideo.supports` gains `first_last_frame_to_video: True` and `reference_to_video: True`.
+- `operation_statuses()` returns all four operations; `is_operation_available()` accepts all four.
+- `execute()` rejects `first_last_frame_to_video` / `reference_to_video` for any family other than `minimax_h3_hyperflow_local` before building a workflow.
+- The doc scanner skips `docs/superpowers/plans/**`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/contracts/test_hyperflow_selector.py`:
+
+```python
+from tools.video.comfyui_video import ComfyUIVideo
+
+
+def test_hyperflow_operations_are_advertised():
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    for operation in ("first_last_frame_to_video", "reference_to_video"):
+        assert tool.supports.get(operation) is True
+        assert operation in tool.operation_statuses()
+        assert tool.is_operation_available(operation) is True
+
+
+def test_non_hyperflow_family_rejects_new_operations():
+    result = ComfyUIVideo().execute({
+        "prompt": "x", "model_family": "wan2.2",
+        "operation": "reference_to_video",
+        "output_path": "out.mp4",
+    })
+    assert not result.success
+    assert "minimax_h3_hyperflow_local" in (result.error or "")
+```
+
+Append to `tests/contracts/test_skill_execute_examples.py`:
+
+```python
+def test_plan_docs_are_not_scanned():
+    assert not [where for where, _, _ in EXAMPLES if where.startswith("docs/superpowers/plans/")]
+```
+
+- [ ] **Step 2: Run them to verify failure**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/contracts/test_hyperflow_selector.py tests/contracts/test_skill_execute_examples.py -v`
+Expected: the selector/guard tests fail; the plan-doc scan test fails.
+
+- [ ] **Step 3: Implement**
+
+- In `tools/video/comfyui_video.py`: add the two `supports` keys; extend `operation_statuses()` with `first_last_frame_to_video` and `reference_to_video` (`available` when the server is available and the corresponding `hyperflow_int8_*_api.json` exists, `degraded` otherwise); extend `is_operation_available()` to accept all four; add the family/operation guard at the top of `execute`.
+- In `tools/video/video_selector.py`: no logic change is expected if it reads `supports`/`operation_statuses`; verify the new operations route. If a hardcoded operation set exists, extend it.
+- In `tests/contracts/test_comfyui_tools.py`: update the exact-dict assertion for `operation_statuses()` to include the two new keys.
+- In `tests/contracts/test_skill_execute_examples.py`: filter out paths whose repo-relative form starts with `docs/superpowers/plans/`.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `.venv/Scripts/python.exe -m pytest tests/contracts/test_hyperflow_selector.py tests/contracts/test_skill_execute_examples.py tests/contracts/test_comfyui_tools.py -v`
+Expected: all pass; the four plan-doc false failures are gone.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tools/video/comfyui_video.py tools/video/video_selector.py tests/contracts/test_comfyui_tools.py tests/contracts/test_skill_execute_examples.py tests/contracts/test_hyperflow_selector.py
+git commit -m "fix(comfyui): 打通 HyperFlow 选择器并排除计划文档扫描"
+```
+
+---
+
 ### Task 10: Add the model-neutral `shot_spec` schema
 
 **Files:**
