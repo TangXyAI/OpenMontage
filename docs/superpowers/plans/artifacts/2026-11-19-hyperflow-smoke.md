@@ -101,3 +101,81 @@ run did not OOM; the fallback resolution (640x352, 49 frames) was not needed.
 3. `workflow_provenance.model_stack` from the bundled workflow still lists the
    GGUF filenames; the executed `checkpoint_name` and `loader` fields confirm
    the INT8 checkpoint that actually ran.
+
+## Corrected 5-second run
+
+Corrective re-run after the first smoke produced 3.04 s (73 frames at the
+bundled 24 fps). Target: 121 frames at 24 fps = 5.04 s. Resolution was reduced
+to 768x432 to keep the larger frame count inside 16 GB VRAM. The ComfyUI server
+was reused, not restarted (0.45.0, pid 37724, `http://127.0.0.1:8188`,
+`/system_stats` returned HTTP 200).
+
+### Command
+
+```bash
+.venv/Scripts/python.exe - <<'PY'
+import json, time
+from tools.video.comfyui_video import ComfyUIVideo
+t0 = time.time()
+r = ComfyUIVideo().execute({
+    "prompt": "A rain-soaked neo-noir alley, one continuous shot, slow push-in.",
+    "model_family": "minimax_h3_hyperflow_local",
+    "checkpoint_name": "minimax_h3_fl2va_hyperflow_flash_14b-int8_convrot.safetensors",
+    "loader": "auto",
+    "operation": "text_to_video",
+    "width": 768, "height": 432, "num_frames": 121, "steps": 6,
+    "output_path": "projects/hyperflow-smoke/assets/video/t2v-5s.mp4",
+})
+print("SUCCESS", r.success)
+print("ERROR", r.error)
+print("DATA", json.dumps(r.data, indent=2, default=str))
+print("WALL_SECONDS", round(time.time() - t0, 2))
+PY
+```
+
+### Result
+
+- `success`: `True`; `error`: `None`; outer wall clock 70.4 s
+- Loader: `HyperFlowLoader`; checkpoint
+  `minimax_h3_fl2va_hyperflow_flash_14b-int8_convrot.safetensors`
+- Bundled workflow `hyperflow_int8_t2v_api.json`, sha256
+  `6240a9c48a4b151a27446222264395f272c154543f5d6cde78f4ffbfea7c86fa`
+- Output: `projects/hyperflow-smoke/assets/video/t2v-5s.mp4` (763,749 bytes)
+- Models were still cached from the first run (log: `0 models unloaded`, no
+  re-initialization), so this wall time excludes model load.
+- Tool metadata matched ffprobe: `num_frames` 124, `fps` 24.0,
+  `duration_seconds` 5.167, `metadata_source` `ffprobe`.
+
+### ffprobe
+
+```text
+video: h264, 768x432, 24/1 fps, 124 frames, 5.166667 s
+audio: aac, 32000 Hz, 2 channels, 5.167000 s
+format: mp4, duration 5.167000 s, size 763,749 bytes, 1,182,502 b/s
+```
+
+One video and one audio stream, as required. Requested 121 frames; the model
+path produced 124 (a multiple of 4), so duration is 5.167 s rather than 5.042 s
+(121 / 24) — within 0.13 s (+2.6%) of the 5 s target.
+
+### Timing
+
+| Field | Value |
+|---|---|
+| prompt_id | `df0e4815-5740-4bf7-a1e0-52a932482a0c` |
+| submit_s | 2.039 |
+| client_queue_and_poll_s | 62.231 |
+| comfy_prompt_exec_s | 59.481 |
+| download_s | 2.082 |
+| client_overhead_s | 6.872 |
+| wall_s | 66.353 |
+
+ComfyUI log: `Prompt executed in 59.48 seconds`; sampling 6/6 steps in 26 s.
+For comparison, the 960x544 / 73-frame run executed in 68.37 s — the lower
+resolution more than offset the 1.7x frame count.
+
+### Peak VRAM
+
+`nvidia-smi memory.used` sampled every 2 s during the run (37 samples): max
+15,509 MiB of 16,376 MiB, leaving ~867 MiB headroom. No OOM; the 640x352
+fallback was not needed. Post-run cached usage was 14,412 MiB.
