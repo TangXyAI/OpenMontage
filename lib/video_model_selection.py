@@ -314,15 +314,27 @@ def build_menu(
     for route in default_routes():
         tool = tools.get(route.tool)
         status = _tool_status(tool)
-        available = status == "available"
+        tool_available = status == "available"
+        available = tool_available
         variant = _LOCAL_VARIANT_ROUTES.get(route.route_id)
         variant_state = _variant_readiness(readiness, variant) if variant else None
         if variant_state is not None:
-            available = bool(variant_state.get("ready"))
+            variant_ready = bool(variant_state.get("ready"))
+            # A local route needs both its quantization on disk and a usable
+            # ComfyUI tool. Weights alone are not enough: a stopped server
+            # cannot accept the job.
+            available = variant_ready and tool_available
             status = "available" if available else "unavailable"
         cost = 0.0 if route.local else _tool_cost(tool, duration)
         if variant_state is not None:
-            setup = None if available else _variant_setup(variant_state)
+            setup_parts: list[str] = []
+            if not variant_state.get("ready"):
+                setup_parts.append(_variant_setup(variant_state))
+            if not tool_available:
+                tool_hint = _tool_setup(tool)
+                if tool_hint and tool_hint not in setup_parts:
+                    setup_parts.append(tool_hint)
+            setup = "; ".join(setup_parts) or None
         else:
             setup = None if available else _tool_setup(tool)
         menu.append(

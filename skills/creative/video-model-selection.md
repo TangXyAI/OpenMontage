@@ -56,7 +56,9 @@ Build the menu from live registry data:
 - Read each candidate tool's `status` and `estimate_cost`; show availability and cost
   exactly as the registry reports them.
 - **Show local routes first**, with readiness (weights / nodes / VAE / VRAM) and step
-  count so the user can compare against cloud.
+  count so the user can compare against cloud. A local route is available only when
+  its quantization is ready **and** the ComfyUI tool/server is available; show both
+  blockers when either fails.
 - **Show missing local files as blockers**, not silent omissions, with a download hint
   (for example the ModelScope file names and target directories from
   `.agents/skills/hyperflow-h3/SKILL.md`).

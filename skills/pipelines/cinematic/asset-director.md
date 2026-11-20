@@ -46,6 +46,7 @@ For `narrative_generated` productions, work through this chain in order. Each st
    proposal_metadata = state.artifacts["proposal"]["proposal_packet"]["metadata"]
    selected_route = proposal_metadata["selected_route"]
    shortlist_options = proposal_metadata["video_model_shortlist"]
+   decision_log = state.artifacts["decision_log"]
 
    require_selected_route(decision_log, selected_route)
    record_selection(

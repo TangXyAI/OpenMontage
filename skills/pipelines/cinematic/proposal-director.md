@@ -55,7 +55,10 @@ from tools.tool_registry import registry
 from lib.local_video_readiness import check_hyperflow_readiness
 from lib.video_model_selection import build_menu, render_menu
 registry.discover()
-readiness = check_hyperflow_readiness(comfyui_root, model_roots, server_running=True)
+comfyui_status = registry.get("comfyui_video").get_status().value
+readiness = check_hyperflow_readiness(
+    comfyui_root, model_roots, server_running=(comfyui_status == "available")
+)
 menu = build_menu(registry, duration=5, readiness=readiness)
 print(render_menu(menu))
 "
@@ -63,7 +66,7 @@ print(render_menu(menu))
 
 `lib.video_model_selection.build_menu` returns the fixed catalog ordered by `priority`, **local first** — HyperFlow GGUF → HyperFlow INT8 → H3 local → cloud H3 (direct, fal, Runway, Atlas, ComfyUI partner) → H3 Max → Pika H3 Flex → Seedance 2.5 — with `route_id`, `family`, `route`, `tool`, `model`, `operations`, `available`/`status`, `cost_5s`, and `setup` hints for unavailable tools.
 
-Pass the readiness result to `build_menu` so the two HyperFlow routes are judged separately: `hyperflow_gguf` reads `readiness["variants"]["gguf"]` and `hyperflow_int8` reads `readiness["variants"]["int8"]`. A route whose quantization is absent on disk is marked `available: false`, and its `setup` is the variant's weight blockers rather than the generic tool-install text. `h3_local` and cloud routes keep using the tool status. Without a `readiness` argument, every local route falls back to the tool status.
+Pass the readiness result to `build_menu` so the two HyperFlow routes are judged separately: `hyperflow_gguf` reads `readiness["variants"]["gguf"]` and `hyperflow_int8` reads `readiness["variants"]["int8"]`. A local route is `available` only when **both** its quantization is ready **and** the ComfyUI tool/server is available; the `setup` hint names whichever blocker applies. `h3_local` and cloud routes keep using the tool status. Without a `readiness` argument, every local route falls back to the tool status.
 
 When any local route is a candidate (`hyperflow_gguf`, `hyperflow_int8`, `h3_local`), check the machine before offering it:
 
@@ -72,7 +75,7 @@ from lib.local_video_readiness import check_hyperflow_readiness
 result = check_hyperflow_readiness(comfyui_root, model_roots, server_running=...)
 ```
 
-The result carries `variants` (`{"gguf": {...}, "int8": {...}}`, each with `ready`, `fl2va`, `ref2va`, and its own `blockers`) and `ready_variants`, plus the shared `checks`. Show `result["blockers"]` verbatim as missing weights, node packs, or server state — never silently omit an unavailable local route — and report `result["warnings"]` as optional. Name the missing quantization explicitly (for example "HyperFlow GGUF weights are not installed; HyperFlow INT8 is ready"), because the two routes look identical in the menu otherwise. Surface the HyperFlow weight license note wherever a HyperFlow route appears.
+The result carries `variants` (`{"gguf": {...}, "int8": {...}}`, each with `ready`, `fl2va`, `ref2va`, and its own `blockers`) and `ready_variants`, plus the shared `checks`. Show the matching variant's `blockers` verbatim as missing weights, and the top-level `blockers` for the server/version/node state — never silently omit an unavailable local route — and report `result["warnings"]` as optional. Name the missing quantization explicitly (for example "HyperFlow GGUF weights are not installed; HyperFlow INT8 is ready"), because the two routes look identical in the menu otherwise. Surface the HyperFlow weight license note wherever a HyperFlow route appears.
 
 **Present the video model shortlist to the user:**
 
@@ -89,8 +92,9 @@ from lib.video_model_selection import build_menu, record_selection
 from tools.tool_registry import registry
 
 registry.discover()
+comfyui_status = registry.get("comfyui_video").get_status().value
 readiness = check_hyperflow_readiness(
-    comfyui_root, model_roots, server_running=True
+    comfyui_root, model_roots, server_running=(comfyui_status == "available")
 )
 shortlist = build_menu(registry, duration=5, readiness=readiness)  # the rows the user reviewed
 selected_route = "<approved route_id>"        # the route_id the user approved

@@ -26,9 +26,9 @@ class FakeTool:
 
 
 class FakeRegistry:
-    def __init__(self):
+    def __init__(self, comfyui_status="unavailable"):
         self._tools = {
-            "comfyui_video": FakeTool("unavailable", 0.0),
+            "comfyui_video": FakeTool(comfyui_status, 0.0),
             "minimax_video": FakeTool("available", 0.65),
         }
 
@@ -92,7 +92,7 @@ def _readiness(*, gguf_ready=False, int8_ready=True):
 
 
 def test_menu_uses_readiness_per_quantization_variant():
-    menu = build_menu(FakeRegistry(), readiness=_readiness())
+    menu = build_menu(FakeRegistry("available"), readiness=_readiness())
     gguf = next(item for item in menu if item["route_id"] == "hyperflow_gguf")
     int8 = next(item for item in menu if item["route_id"] == "hyperflow_int8")
     assert gguf["available"] is False
@@ -102,6 +102,14 @@ def test_menu_uses_readiness_per_quantization_variant():
     assert int8["available"] is True
     assert int8["status"] == "available"
     assert int8["setup"] is None
+
+
+def test_ready_weights_with_unavailable_tool_are_not_available():
+    menu = build_menu(FakeRegistry(), readiness=_readiness())
+    int8 = next(item for item in menu if item["route_id"] == "hyperflow_int8")
+    assert int8["available"] is False
+    assert int8["status"] == "unavailable"
+    assert "ComfyUI" in int8["setup"]
 
 
 def test_menu_keeps_tool_status_for_h3_local_with_readiness():
@@ -120,7 +128,7 @@ def test_menu_readiness_leaves_cloud_routes_unchanged():
 
 def test_menu_marks_gguf_available_when_its_variant_is_ready():
     menu = build_menu(
-        FakeRegistry(), readiness=_readiness(gguf_ready=True, int8_ready=False)
+        FakeRegistry("available"), readiness=_readiness(gguf_ready=True, int8_ready=False)
     )
     gguf = next(item for item in menu if item["route_id"] == "hyperflow_gguf")
     int8 = next(item for item in menu if item["route_id"] == "hyperflow_int8")
