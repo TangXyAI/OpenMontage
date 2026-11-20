@@ -112,6 +112,19 @@ def test_ready_weights_with_unavailable_tool_are_not_available():
     assert "ComfyUI" in int8["setup"]
 
 
+def test_missing_weights_and_missing_tool_both_appear_in_setup():
+    menu = build_menu(
+        FakeRegistry(),
+        readiness=_readiness(gguf_ready=False, int8_ready=False),
+    )
+    gguf = next(item for item in menu if item["route_id"] == "hyperflow_gguf")
+    assert gguf["available"] is False
+    assert "Missing HyperFlow" in gguf["setup"]
+    assert "ComfyUI" in gguf["setup"]
+    assert "; ;" not in gguf["setup"]
+    assert not gguf["setup"].endswith(";")
+
+
 def test_menu_keeps_tool_status_for_h3_local_with_readiness():
     menu = build_menu(FakeRegistry(), readiness=_readiness())
     h3_local = next(item for item in menu if item["route_id"] == "h3_local")

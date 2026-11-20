@@ -55,9 +55,10 @@ from tools.tool_registry import registry
 from lib.local_video_readiness import check_hyperflow_readiness
 from lib.video_model_selection import build_menu, render_menu
 registry.discover()
-comfyui_status = registry.get("comfyui_video").get_status().value
+tool = registry.get("comfyui_video")
+comfyui_status = tool.get_status().value if tool else "unavailable"
 readiness = check_hyperflow_readiness(
-    comfyui_root, model_roots, server_running=(comfyui_status == "available")
+    comfyui_root, model_roots, server_running=(comfyui_status != "unavailable")
 )
 menu = build_menu(registry, duration=5, readiness=readiness)
 print(render_menu(menu))
@@ -92,9 +93,10 @@ from lib.video_model_selection import build_menu, record_selection
 from tools.tool_registry import registry
 
 registry.discover()
-comfyui_status = registry.get("comfyui_video").get_status().value
+tool = registry.get("comfyui_video")
+comfyui_status = tool.get_status().value if tool else "unavailable"
 readiness = check_hyperflow_readiness(
-    comfyui_root, model_roots, server_running=(comfyui_status == "available")
+    comfyui_root, model_roots, server_running=(comfyui_status != "unavailable")
 )
 shortlist = build_menu(registry, duration=5, readiness=readiness)  # the rows the user reviewed
 selected_route = "<approved route_id>"        # the route_id the user approved

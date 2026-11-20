@@ -331,8 +331,10 @@ def build_menu(
             if not variant_state.get("ready"):
                 setup_parts.append(_variant_setup(variant_state))
             if not tool_available:
-                tool_hint = _tool_setup(tool)
-                if tool_hint and tool_hint not in setup_parts:
+                tool_hint = _tool_setup(tool) or (
+                    "ComfyUI video tool is not registered; run registry.discover()"
+                )
+                if tool_hint not in setup_parts:
                     setup_parts.append(tool_hint)
             setup = "; ".join(setup_parts) or None
         else:
