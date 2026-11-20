@@ -88,8 +88,23 @@ print(render_local_h3_menu(variants))
 - HyperFlow has bundled API workflows, so its `fl2va`/`ref2va` variants are runnable.
   Stock, hybrid, DaSiWa and Singularity variants are installed but their ComfyUI
   workflows are UI-only on this machine; show the export hint instead of hiding them.
-- The user selects a `variant_id`. Record it under `provider_selection` /
-  `Local H3 variant` with `record_selection(..., subject=LOCAL_H3_DECISION_SUBJECT)`.
+- The user selects a `variant_id`. Map the menu rows with `variant_option` /
+  `variant_route`, then record the choice under `provider_selection` /
+  `Local H3 variant`:
+
+  ```python
+  from lib.video_model_selection import record_selection
+
+  selected = next(row for row in variants if row["variant_id"] == chosen_id)
+  record_selection(
+      "projects/<project-id>/decision_log.json", "<project-id>", "proposal",
+      variant_route(selected),
+      [variant_option(row) for row in variants],
+      "user selected a local H3 variant",
+      subject=LOCAL_H3_DECISION_SUBJECT,
+  )
+  ```
+
   Only a `runnable` variant may proceed to take generation; a UI-only workflow must be
   exported to API format first. Never substitute HyperFlow for a different variant the
   user chose.

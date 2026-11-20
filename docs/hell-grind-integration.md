@@ -379,14 +379,18 @@ HyperFlow 权重适用 MiniMax H3 Community License；欧盟、英国、韩国�
 | `quantization` | int8 / gguf / fp8 / fp16 / bf16 / nvfp4 |
 | `operations` | t2v / i2v / flf2v / ref2v |
 | `size_gb` | 检查点大小 |
-| `workflow` / `workflow_format` | 匹配的 ComfyUI 工作流及其格式（api / ui） |
+| `checkpoint_name` | 传给视频工具的检查点文件名 |
+| `workflow` / `workflow_format` | 匹配的 ComfyUI 工作流及其格式（api / ui / unknown） |
+| `operation_workflows` | HyperFlow 的每个操作对应的内置 API 工作流 |
+| `output_node` | API 工作流中检测到的输出节点 ID |
 | `runnable` / `setup` | 是否可直接执行；不可执行时给出导出/安装提示 |
 
 规则：
 
 - HyperFlow 使用内置 API 工作流，`runnable = true`。
-- DaSiWa、Singularity、10Eros、H3 Hybrid 当前只有 UI 工作流：`runnable = false`，提示在 ComfyUI 中导出 API 格式。
-- 用户选择 `variant_id`，记录在 `decision_log` 的 `provider_selection` / `Local H3 variant`。
+- DaSiWa、Singularity、10Eros、H3 Hybrid 当前只有 UI 工作流：`runnable = false`，提示在 ComfyUI 中导出 API 格式。匹配工作流时优先 API > UI > unknown，跳过 `*_preset.json` 与放大/精修类工作流。
+- 用户选择 `variant_id`，用 `variant_option` / `variant_route` 映射菜单行，记录在 `decision_log` 的 `provider_selection` / `Local H3 variant`。
+- 选择结果写入 `proposal_packet.metadata.local_h3_variants` 与 `selected_variant`（含 `checkpoint_name`、`workflow`、`output_node`、`runnable`）。
 - 只有 `runnable = true` 的变体可以进入批量 take；UI-only 必须先导出，**不得静默替换成 HyperFlow**。
 
 ---

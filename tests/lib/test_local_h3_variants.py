@@ -1,7 +1,14 @@
 import json
 from pathlib import Path
 
-from lib.local_h3_variants import build_local_h3_menu, render_local_h3_menu
+from lib.local_h3_variants import (
+    LOCAL_H3_DECISION_SUBJECT,
+    build_local_h3_menu,
+    render_local_h3_menu,
+    variant_option,
+    variant_route,
+)
+from lib.video_model_selection import record_selection, require_selected_route
 
 
 def _write(path: Path, text: str | bytes = b"x") -> None:
@@ -13,7 +20,14 @@ def _write(path: Path, text: str | bytes = b"x") -> None:
 
 
 def _workflow(nodes: bool) -> str:
-    return json.dumps({"nodes": []} if nodes else {"1": {"class_type": "X", "inputs": {}}})
+    if nodes:
+        return json.dumps({"nodes": []})
+    return json.dumps(
+        {
+            "1": {"class_type": "X", "inputs": {}},
+            "2": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "x"}},
+        }
+    )
 
 
 def _fixture(tmp_path: Path):
@@ -30,16 +44,19 @@ def _fixture(tmp_path: Path):
     ):
         _write(models / name, b"x" * 1024)
     _write(models / "krea2_turbo_fp8_scaled.safetensors.part", b"x")
+    _write(models / "minimax_h3_partial.safetensors.part", b"x")
 
     bundled = tmp_path / "bundled"
-    _write(bundled / "hyperflow_int8_t2v_api.json", _workflow(nodes=False))
-    _write(bundled / "hyperflow_int8_ref2v_api.json", _workflow(nodes=False))
+    for name in ("t2v", "i2v", "flf2v", "ref2v"):
+        _write(bundled / f"hyperflow_int8_{name}_api.json", _workflow(nodes=False))
 
     workflows = tmp_path / "workflows"
     _write(workflows / "Singularity" / "minimax_h3_singularity_V2_r2va.json", _workflow(nodes=True))
     _write(workflows / "Singularity" / "10eros_singularity_base1.json", _workflow(nodes=True))
     _write(workflows / "dasiwa-h3" / "DaSiWa MiniMaxH3.json", _workflow(nodes=True))
     _write(workflows / "local-minimax-h3-t2v.json", _workflow(nodes=True))
+    # A comfytv preset is not a ComfyUI workflow and must lose to the UI file.
+    _write(workflows / "local-minimax-h3-t2v_preset.json", json.dumps({"_comment": "preset"}))
     return models, bundled, workflows
 
 
@@ -63,9 +80,12 @@ def test_lists_every_installed_h3_checkpoint_and_excludes_other_models(tmp_path)
     assert hyperflow_fl["operations"] == ["t2v", "i2v", "flf2v"]
     assert hyperflow_fl["runnable"] is True
     assert hyperflow_fl["workflow_format"] == "api"
+    assert hyperflow_fl["output_node"] == "2"
+    assert set(hyperflow_fl["operation_workflows"]) == {"t2v", "i2v", "flf2v"}
     assert hyperflow_fl["setup"] is None
     assert hyperflow_ref["operations"] == ["ref2v"]
     assert hyperflow_ref["runnable"] is True
+    assert hyperflow_ref["output_node"] == "2"
 
     singularity = _by_path(menu, "Singularity_ref2va")
     assert singularity["family"] == "Singularity"
@@ -88,7 +108,8 @@ def test_lists_every_installed_h3_checkpoint_and_excludes_other_models(tmp_path)
     assert hybrid["family"] == "H3 Hybrid"
     assert hybrid["operations"] == ["t2v", "i2v", "flf2v", "ref2v"]
     assert hybrid["runnable"] is False
-    assert "local-minimax-h3" in Path(hybrid["workflow"]).name.lower()
+    assert Path(hybrid["workflow"]).name == "local-minimax-h3-t2v.json"
+    assert "export" in hybrid["setup"].lower()
 
     assert "10eros" not in Path(singularity["workflow"]).name.lower()
 
@@ -100,6 +121,9 @@ def test_every_installed_variant_is_rendered_with_status(tmp_path):
 
     assert "Local MiniMax H3 variants" in rendered
     assert rendered.count("HyperFlow") >= 2
+    assert "workflow:" in rendered.lower()
+    assert "hyperflow_int8_t2v_api.json" in rendered
+    assert "local-minimax-h3-t2v.json" in rendered
     assert "runnable" in rendered.lower()
     assert "installed (not runnable)" in rendered.lower()
     assert "export" in rendered.lower()
@@ -108,8 +132,64 @@ def test_every_installed_variant_is_rendered_with_status(tmp_path):
 def test_variant_without_workflow_is_still_listed(tmp_path):
     models = tmp_path / "models" / "diffusion_models"
     _write(models / "minimax_h3_orphan_int8.safetensors")
-    menu = build_local_h3_menu([models], [], bundled_workflow_dir=tmp_path / "empty")
+    workflows = tmp_path / "workflows"
+    _write(
+        workflows / "local-minimax-h3-t2v_preset.json",
+        json.dumps({"_comment": "preset"}),
+    )
+    menu = build_local_h3_menu(
+        [models], [workflows], bundled_workflow_dir=tmp_path / "empty"
+    )
     orphan = menu[0]
     assert orphan["runnable"] is False
     assert orphan["workflow"] is None
     assert "No matching H3 workflow" in orphan["setup"]
+
+
+def test_stock_operations_follow_the_filename(tmp_path):
+    models = tmp_path / "models" / "diffusion_models"
+    _write(models / "minimax_h3_fl2va_int8.safetensors")
+    _write(models / "minimax_h3_t2va_int8.safetensors")
+    menu = build_local_h3_menu(
+        [models], [], bundled_workflow_dir=tmp_path / "empty"
+    )
+    fl2va = _by_path(menu, "fl2va")
+    t2va = _by_path(menu, "t2va")
+    assert fl2va["operations"] == ["t2v", "i2v", "flf2v"]
+    assert t2va["operations"] == ["t2v"]
+
+
+def test_api_workflow_beats_a_ui_workflow_of_the_same_family(tmp_path):
+    models = tmp_path / "models" / "diffusion_models"
+    _write(models / "minimax_h3_fl2va_int8.safetensors")
+    workflows = tmp_path / "workflows"
+    _write(workflows / "local-minimax-h3-t2v.json", _workflow(nodes=True))
+    _write(workflows / "local-minimax-h3-t2v_api.json", _workflow(nodes=False))
+    menu = build_local_h3_menu(
+        [models], [workflows], bundled_workflow_dir=tmp_path / "empty"
+    )
+    assert menu[0]["runnable"] is True
+    assert menu[0]["workflow_format"] == "api"
+    assert Path(menu[0]["workflow"]).name == "local-minimax-h3-t2v_api.json"
+    assert menu[0]["output_node"] == "2"
+
+
+def test_menu_rows_map_to_a_schema_valid_decision(tmp_path):
+    models, bundled, workflows = _fixture(tmp_path)
+    menu = build_local_h3_menu([models], [workflows], bundled_workflow_dir=bundled)
+    selected = _by_path(menu, "fl2va_hyperflow")
+    log_path = tmp_path / "decision_log.json"
+    record_selection(
+        log_path,
+        "film",
+        "proposal",
+        variant_route(selected),
+        [variant_option(row) for row in menu],
+        "local H3 variant chosen",
+        subject=LOCAL_H3_DECISION_SUBJECT,
+    )
+    log = json.loads(log_path.read_text(encoding="utf-8"))
+    decision = require_selected_route(
+        log, selected["variant_id"], subject=LOCAL_H3_DECISION_SUBJECT
+    )
+    assert decision["selected"] == selected["variant_id"]

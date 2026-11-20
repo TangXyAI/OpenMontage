@@ -96,7 +96,9 @@ variants = build_local_h3_menu(model_roots, workflow_roots)
 print(render_local_h3_menu(variants))
 ```
 
-Show `family`, quantization, operations, size, matching workflow, and `runnable`/`setup` for each. Wait for the user's `variant_id`; record it under `provider_selection` / `Local H3 variant` with `record_selection(..., subject=LOCAL_H3_DECISION_SUBJECT)`. Do not omit an installed variant and do not silently substitute a runnable HyperFlow variant for a different choice.
+Show `family`, quantization, operations, size, matching workflow, and `runnable`/`setup` for each. Wait for the user's `variant_id`; map the row with `variant_route` / `variant_option` and record it under `provider_selection` / `Local H3 variant` with `record_selection(..., subject=LOCAL_H3_DECISION_SUBJECT)`. Do not omit an installed variant and do not silently substitute a runnable HyperFlow variant for a different choice.
+
+Persist the variant shortlist and the chosen row in `proposal_packet.metadata.local_h3_variants` and `proposal_packet.metadata.selected_variant`. The selected object must include `variant_id`, `checkpoint_name`, `workflow`, `workflow_format`, `output_node`, and `runnable`; the asset stage reads it to verify the gate and to build the tool call.
 
 **Record the choice before leaving proposal.** Write `proposal_packet.metadata.video_model_shortlist` (the menu rows the user saw) and `proposal_packet.metadata.selected_route` (the approved `route_id`), then append the decision with `record_selection` under `category: "provider_selection"`, `subject: "Video model and route"`:
 
