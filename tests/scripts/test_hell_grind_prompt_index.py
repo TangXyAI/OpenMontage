@@ -364,3 +364,55 @@ English source.
     assert not record["prompt"].endswith("```")
     assert not record["prompt"].endswith("---")
 
+
+def test_combined_section_trailing_separator_is_stripped(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Scene 1" / "prompts"
+    _write(
+        prompts / "00001_combined_tail.zh.md",
+        """## 原文 (source) · 中文对照 (zh)
+
+**source:**
+```
+English source.
+```
+**zh:**
+```
+中文正文。
+```
+---
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+    assert record["prompt"] == "English source."
+    assert record["prompt_zh"] == "中文正文。"
+
+
+def test_level_three_section_headings_are_recognized(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Extra Regen 3" / "prompts"
+    _write(
+        prompts / "00001_level3.zh.md",
+        """### 原文 (source)
+
+English source under a level-three heading.
+
+### 中文对照 (zh)
+
+三级标题下的中文正文。
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+    assert record["prompt"] == "English source under a level-three heading."
+    assert record["prompt_zh"] == "三级标题下的中文正文。"
+

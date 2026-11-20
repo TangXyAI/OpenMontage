@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 _META_RE = re.compile(r"^-\s+([A-Za-z_]+):\s*(.*)$")
-_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
+_HEADING_RE = re.compile(r"^#{2,3}\s+(.+?)\s*$")
 _SOURCE_MARK_RE = re.compile(r"^\*\*source:\*\*\s*$", re.IGNORECASE)
 _ZH_MARK_RE = re.compile(r"^\*\*zh:\*\*\s*$", re.IGNORECASE)
 
@@ -58,7 +58,7 @@ def _split_combined(body: str) -> tuple[str, str]:
             chinese.append(line)
     if not source and not chinese:
         return _clean_section(body), ""
-    return "\n".join(source).strip(), "\n".join(chinese).strip()
+    return _clean_section("\n".join(source)), _clean_section("\n".join(chinese))
 
 
 def parse_prompt_markdown(text: str) -> tuple[dict[str, str], str, str]:
@@ -86,7 +86,6 @@ def parse_prompt_markdown(text: str) -> tuple[dict[str, str], str, str]:
                 # Translator notes and sidecar sections terminate the prompt;
                 # they must never flow into prompt or prompt_zh.
                 flush()
-                current = None
                 continue
             known = (
                 title == "元数据"
