@@ -79,15 +79,16 @@ filters, grade, or mix changes applied).
   `render_runtime="ffmpeg"`, FFmpeg compose path
 - Duration: 20.02 s (target 20.0 s, 0.1% drift)
 - Streams:
-  - video: h264, 640x352, 30 fps, 600 frames, ~883 kb/s
+  - video: h264, 640x352, 24 fps, 480 frames, ~887 kb/s
   - audio: aac, 48 kHz, stereo, ~193 kb/s
-- File size: 2,713,680 bytes
+- File size: 2,715,174 bytes
 - Final review: `pass` — no black frames, missing assets, or broken overlays;
   `runtime_swap_detected: false`, `delivery_promise_honored: true`.
 
-The compose pass normalises every segment to 30 fps, so the deliverable is
-30 fps even though the generated takes are native 24 fps. No other frame or
-audio parameter changed.
+The compose path preserves the source frame rate (24 fps, set as
+`fps: 24` in `edit_decisions.json`), so the deliverable keeps the native
+cinematic cadence of the generated takes. No other frame or audio parameter
+changed.
 
 ## Known limitations
 

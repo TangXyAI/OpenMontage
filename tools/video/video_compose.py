@@ -176,6 +176,18 @@ class VideoCompose(BaseTool):
                 },
             },
             "audio_path": {"type": "string", "description": "Mixed audio to mux into output"},
+            "fps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 120,
+                "default": 30,
+                "description": (
+                    "Output frame rate for the FFmpeg compose path. Preserves "
+                    "the source cadence (e.g. 24 for cinematic takes) instead "
+                    "of the historical 30 fps normalisation. Falls back to "
+                    "edit_decisions.fps, then 30."
+                ),
+            },
             "profile": {
                 "type": "string",
                 "description": (
@@ -541,6 +553,21 @@ class VideoCompose(BaseTool):
             artifacts=[str(video_path)],
         )
 
+    @staticmethod
+    def _target_fps(inputs: dict[str, Any], edit_decisions: dict[str, Any]) -> int:
+        """Resolve the compose frame rate: explicit input, edit decision, then 30."""
+        for source in (inputs, edit_decisions):
+            if not isinstance(source, dict):
+                continue
+            value = source.get("fps")
+            if value is None:
+                continue
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+        return 30
+
     def _compose(self, inputs: dict[str, Any]) -> ToolResult:
         """FFmpeg composition: concat video cuts, add audio, burn subtitles.
 
@@ -551,6 +578,8 @@ class VideoCompose(BaseTool):
         edit_decisions = inputs.get("edit_decisions")
         if not edit_decisions:
             return ToolResult(success=False, error="edit_decisions required for compose")
+
+        target_fps = self._target_fps(inputs, edit_decisions)
 
         output_path = Path(inputs.get("output_path", "composed_output.mp4"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -664,7 +693,7 @@ class VideoCompose(BaseTool):
                     # pix_fmt / sar across ALL segments — otherwise it throws
                     # "Non-monotonous DTS" or silently produces corrupt output.
                     #
-                    # Target is target_w x target_h @ 30fps, yuv420p, sar=1
+                    # Target is target_w x target_h @ target_fps, yuv420p, sar=1
                     # (default 1920x1080; overridable via `profile` or
                     # edit_decisions.metadata.compose_target — see above).
                     # fit="pad" letterboxes to preserve all content; fit="cover"
@@ -679,7 +708,7 @@ class VideoCompose(BaseTool):
                             f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease",
                             f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=black",
                         ]
-                    vf_parts: list[str] = [*geom, "setsar=1", "fps=30"]
+                    vf_parts: list[str] = [*geom, "setsar=1", f"fps={target_fps}"]
                     af_parts: list[str] = []
                     if speed != 1.0:
                         vf_parts.append(f"setpts={1.0/speed}*PTS")
@@ -694,7 +723,7 @@ class VideoCompose(BaseTool):
                         "-crf", str(crf),
                         "-preset", preset,
                         "-pix_fmt", "yuv420p",
-                        "-r", "30",
+                        "-r", str(target_fps),
                     ])
 
                     # Audio handling: some source clips have no audio stream
@@ -729,7 +758,7 @@ class VideoCompose(BaseTool):
                             "-crf", str(crf),
                             "-preset", preset,
                             "-pix_fmt", "yuv420p",
-                            "-r", "30",
+                            "-r", str(target_fps),
                             "-c:a", "aac",
                             "-b:a", "192k",
                             "-ar", "48000",
