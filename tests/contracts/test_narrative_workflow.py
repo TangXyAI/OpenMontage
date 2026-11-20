@@ -52,7 +52,7 @@ def test_narrative_library_preserves_versions_and_builds_cuts(tmp_path):
     assert len(reloaded.data["shots"]["shot-1"]["takes"]) == 2
     edit = reloaded.edit_decisions(["shot-1"], "ffmpeg")
     import jsonschema
-    schema = json.loads((Path(__file__).parents[2] / "schemas/artifacts/edit_decisions.schema.json").read_text())
+    schema = json.loads((Path(__file__).parents[2] / "schemas/artifacts/edit_decisions.schema.json").read_text(encoding="utf-8"))
     jsonschema.validate(edit, schema)
     assert edit["cuts"][0]["source"] == str(tmp_path / "take2.mp4")
     assert edit["cuts"][0]["out_seconds"] == 4.0
@@ -70,7 +70,7 @@ def test_assets_can_be_linked_to_shots_and_exported_to_manifest(tmp_path):
     library.add_take("shot-1", "take1", "take.mp4", 3, {"seed": 5})
     library.select_take("shot-1", "take1")
     manifest = NarrativeAssets(tmp_path).asset_manifest()
-    schema = json.loads((Path(__file__).parents[2] / "schemas/artifacts/asset_manifest.schema.json").read_text())
+    schema = json.loads((Path(__file__).parents[2] / "schemas/artifacts/asset_manifest.schema.json").read_text(encoding="utf-8"))
     jsonschema.validate(manifest, schema)
     assert {a["path"] for a in manifest["assets"]} == {"hero.png", "take.mp4"}
     assert all(a["scene_id"] == "shot-1" for a in manifest["assets"])
