@@ -28,12 +28,12 @@ _ZH_MARK_RE = re.compile(r"^\*\*zh:\*\*\s*$", re.IGNORECASE)
 
 
 def _clean_section(text: str) -> str:
-    """Strip a leading and/or trailing Markdown code fence, closed or not."""
+    """Strip a leading and/or trailing Markdown code fence and structural tail."""
     lines = text.strip().splitlines()
     if lines and lines[0].strip().startswith("```"):
         lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
+    while lines and lines[-1].strip() in {"```", "---", ""}:
+        lines.pop()
     return "\n".join(lines).strip()
 
 
@@ -82,6 +82,12 @@ def parse_prompt_markdown(text: str) -> tuple[dict[str, str], str, str]:
         heading = _HEADING_RE.match(line)
         if heading:
             title = heading.group(1)
+            if title.startswith(("备注", "段落对齐备注", "参考资产", "元数据头")):
+                # Translator notes and sidecar sections terminate the prompt;
+                # they must never flow into prompt or prompt_zh.
+                flush()
+                current = None
+                continue
             known = (
                 title == "元数据"
                 or title.startswith("原文")
@@ -92,12 +98,21 @@ def parse_prompt_markdown(text: str) -> tuple[dict[str, str], str, str]:
                 combined = title.startswith("原文") and "中文对照" in title
                 current = "COMBINED" if combined else title
                 continue
-            # An unknown `## ` heading is part of the current prompt text, not a
-            # new metadata/source section; keep it so the prompt is not cut.
+            # An unknown `## ` heading (e.g. GEOMETRY) is part of the current
+            # prompt text, not a new metadata/source section; keep it so the
+            # prompt is not cut.
         if current == "元数据":
             match = _META_RE.match(line.strip())
             if match:
-                metadata[match.group(1)] = match.group(2).strip()
+                key, raw = match.group(1), match.group(2).strip()
+                if key in {"job_set_id", "job_type", "source_path"}:
+                    token = re.search(r"`([^`]+)`", raw)
+                    value = token.group(1).strip() if token else raw.strip("`").strip()
+                else:
+                    value = raw
+                    if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+                        value = value[1:-1].strip()
+                metadata[key] = value
         elif current is not None:
             buffer.append(line)
     flush()

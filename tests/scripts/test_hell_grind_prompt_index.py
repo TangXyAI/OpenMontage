@@ -295,3 +295,72 @@ A prompt.
     assert negative.returncode == 2
     assert ">= 0" in negative.stderr
 
+
+def test_translator_notes_are_not_part_of_the_prompt(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Scene 1" / "prompts"
+    _write(
+        prompts / "00001_notes.zh.md",
+        """## 元数据
+- job_set_id: `abc-123` 同批 3 个 job_set
+- job_type: `seedance_2_0`
+
+## 原文 (source)
+
+English source.
+
+## 中文对照 (zh)
+
+中文正文。
+
+## 备注
+
+译者注：不应进入正文。
+
+## 段落对齐备注（可选）
+
+对齐说明：也不应进入正文。
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+    assert record["prompt"] == "English source."
+    assert record["prompt_zh"] == "中文正文。"
+    assert "备注" not in record["prompt_zh"]
+    assert "译者注" not in record["prompt_zh"]
+    assert record["job_set_id"] == "abc-123"
+    assert record["job_type"] == "seedance_2_0"
+
+
+def test_trailing_fence_and_separator_are_stripped(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Scene 1" / "prompts"
+    _write(
+        prompts / "00001_tail.zh.md",
+        """## 原文 (source)
+
+```
+English source.
+```
+
+---
+
+## 中文对照 (zh)
+
+中文正文。
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+    assert record["prompt"] == "English source."
+    assert not record["prompt"].endswith("```")
+    assert not record["prompt"].endswith("---")
+
