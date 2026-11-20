@@ -16,21 +16,49 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 _META_RE = re.compile(r"^-\s+([A-Za-z_]+):\s*(.*)$")
 _HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
+_SOURCE_MARK_RE = re.compile(r"^\*\*source:\*\*\s*$", re.IGNORECASE)
+_ZH_MARK_RE = re.compile(r"^\*\*zh:\*\*\s*$", re.IGNORECASE)
 
 
 def _clean_section(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            text = "\n".join(lines[1:-1]).strip()
-    return text
+    """Strip a leading and/or trailing Markdown code fence, closed or not."""
+    lines = text.strip().splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _split_combined(body: str) -> tuple[str, str]:
+    """Split a `## 原文 (source) · 中文对照 (zh)` block into source and Chinese."""
+    source: list[str] = []
+    chinese: list[str] = []
+    mode: str | None = None
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            continue
+        if _SOURCE_MARK_RE.match(stripped):
+            mode = "source"
+            continue
+        if _ZH_MARK_RE.match(stripped):
+            mode = "zh"
+            continue
+        if mode == "source":
+            source.append(line)
+        elif mode == "zh":
+            chinese.append(line)
+    if not source and not chinese:
+        return _clean_section(body), ""
+    return "\n".join(source).strip(), "\n".join(chinese).strip()
 
 
 def parse_prompt_markdown(text: str) -> tuple[dict[str, str], str, str]:
@@ -42,16 +70,30 @@ def parse_prompt_markdown(text: str) -> tuple[dict[str, str], str, str]:
 
     def flush() -> None:
         nonlocal current, buffer
-        if current is not None:
+        if current == "COMBINED":
+            source, chinese = _split_combined("\n".join(buffer))
+            sections["原文"] = source
+            sections["中文对照"] = chinese
+        elif current is not None:
             sections[current] = _clean_section("\n".join(buffer))
         current, buffer = None, []
 
     for line in text.splitlines():
         heading = _HEADING_RE.match(line)
         if heading:
-            flush()
-            current = heading.group(1)
-            continue
+            title = heading.group(1)
+            known = (
+                title == "元数据"
+                or title.startswith("原文")
+                or title.startswith("中文对照")
+            )
+            if known:
+                flush()
+                combined = title.startswith("原文") and "中文对照" in title
+                current = "COMBINED" if combined else title
+                continue
+            # An unknown `## ` heading is part of the current prompt text, not a
+            # new metadata/source section; keep it so the prompt is not cut.
         if current == "元数据":
             match = _META_RE.match(line.strip())
             if match:
@@ -66,7 +108,9 @@ def parse_prompt_markdown(text: str) -> tuple[dict[str, str], str, str]:
 
 
 def build_record(path: Path, source_root: Path) -> dict[str, object] | None:
-    metadata, prompt, prompt_zh = parse_prompt_markdown(path.read_text(encoding="utf-8"))
+    metadata, prompt, prompt_zh = parse_prompt_markdown(
+        path.read_text(encoding="utf-8", errors="replace")
+    )
     if not prompt and not prompt_zh:
         return None
     scene = metadata.get("folder_official_name") or path.parent.parent.name
@@ -90,6 +134,9 @@ def iter_prompt_files(source_root: Path):
         yield path
 
 
+DEFAULT_OUTPUT = "reference/hell-grind/prompts.jsonl"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -99,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--output",
-        default="reference/hell-grind/prompts.jsonl",
+        default=DEFAULT_OUTPUT,
         help="Output JSONL path",
     )
     parser.add_argument(
@@ -110,29 +157,56 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.limit < 0:
+        print("error: --limit must be >= 0", file=sys.stderr)
+        return 2
+    if args.limit and Path(args.output) == Path(DEFAULT_OUTPUT):
+        print(
+            "error: --limit requires an explicit --output so a preview cannot "
+            "overwrite the full index",
+            file=sys.stderr,
+        )
+        return 2
+
     source_root = Path(args.source).resolve()
     if not source_root.is_dir():
         print(f"error: source directory not found: {source_root}", file=sys.stderr)
         return 2
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    temp = output.with_name(output.name + ".tmp")
 
     seen = 0
     skipped = 0
     written = 0
-    with output.open("w", encoding="utf-8") as handle:
-        for path in iter_prompt_files(source_root):
-            seen += 1
-            record = build_record(path, source_root)
-            if record is None:
-                skipped += 1
-                continue
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            written += 1
-            if args.limit and written >= args.limit:
-                break
+    errors = 0
+    try:
+        with temp.open("w", encoding="utf-8", newline="\n") as handle:
+            for path in iter_prompt_files(source_root):
+                seen += 1
+                try:
+                    record = build_record(path, source_root)
+                except Exception as exc:  # keep one bad file from aborting the corpus
+                    errors += 1
+                    print(f"warning: skipped {path}: {exc}", file=sys.stderr)
+                    continue
+                if record is None:
+                    skipped += 1
+                    continue
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                written += 1
+                if args.limit and written >= args.limit:
+                    break
+        os.replace(temp, output)
+    except Exception:
+        if temp.exists():
+            temp.unlink()
+        raise
 
-    print(f"indexed {written} prompts ({seen} examined, {skipped} empty) -> {output}")
+    print(
+        f"indexed {written} prompts ({seen} examined, {skipped} empty, "
+        f"{errors} errors) -> {output}"
+    )
     return 0
 
 

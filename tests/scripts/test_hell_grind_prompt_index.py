@@ -128,3 +128,170 @@ A second prompt.
     assert record["prompt"] == "A prompt without metadata."
     assert record["prompt_path"] == ""
     assert record["job_set_id"] == ""
+
+
+def test_combined_heading_splits_source_and_chinese(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Flashback 1" / "prompts"
+    _write(
+        prompts / "00001_combined.zh.md",
+        """# prompt 对照
+
+## 元数据
+- job_set_id: combined
+- job_type: seedance_2_0
+- folder_official_name: Flashback 1
+
+## 原文 (source) · 中文对照 (zh)
+
+### IMAGE REFERENCE
+
+**source:**
+```
+IMAGE REFERENCE: a red bridge.
+```
+**zh:**
+```
+图像参考：一座红色的桥。
+```
+
+### STYLE
+
+**source:**
+```
+STYLE: 8K IMAX photoreal.
+```
+**zh:**
+```
+风格：8K IMAX 写实电影。
+```
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+    assert "IMAGE REFERENCE: a red bridge." in record["prompt"]
+    assert "STYLE: 8K IMAX photoreal." in record["prompt"]
+    assert "图像参考：一座红色的桥。" in record["prompt_zh"]
+    assert "风格：8K IMAX 写实电影。" in record["prompt_zh"]
+    assert "**zh:**" not in record["prompt"]
+
+
+def test_unclosed_fence_is_stripped(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Scene 1" / "prompts"
+    _write(
+        prompts / "00001_unclosed.zh.md",
+        """# prompt 对照
+
+## 原文 (source)
+
+```
+A prompt that opens a fence and never closes it.
+
+## 中文对照 (zh)
+
+中文内容。
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+    assert not record["prompt"].startswith("```")
+    assert "A prompt that opens a fence" in record["prompt"]
+
+
+def test_embedded_heading_inside_source_is_not_truncated(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Scene 1" / "prompts"
+    _write(
+        prompts / "00001_heading.zh.md",
+        """# prompt 对照
+
+## 原文 (source)
+
+First paragraph.
+
+## GEOMETRY
+
+Second paragraph after an embedded heading.
+
+## 中文对照 (zh)
+
+中文段落。
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+    assert "First paragraph." in record["prompt"]
+    assert "Second paragraph after an embedded heading." in record["prompt"]
+
+
+def test_zh_md_outside_prompts_is_ignored(tmp_path):
+    source = tmp_path / "archive"
+    _write(
+        source / "brief" / "PROJECT_BRIEF.zh.md",
+        """## 原文 (source)
+
+Not a prompt.
+
+## 中文对照 (zh)
+
+不是提示词。
+""",
+    )
+    prompts = source / "folders" / "Hell Grind" / "Scene 1" / "prompts"
+    _write(
+        prompts / "00001_prompt.zh.md",
+        """## 原文 (source)
+
+A real prompt.
+
+## 中文对照 (zh)
+
+真正的提示词。
+""",
+    )
+
+    output = tmp_path / "out.jsonl"
+    result = _run(source, output)
+
+    assert result.returncode == 0, result.stderr
+    lines = output.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert "A real prompt." in json.loads(lines[0])["prompt"]
+
+
+def test_limit_guard_and_negative_limit(tmp_path):
+    source = tmp_path / "archive"
+    prompts = source / "folders" / "Hell Grind" / "Scene 1" / "prompts"
+    _write(
+        prompts / "00001_prompt.zh.md",
+        """## 原文 (source)
+
+A prompt.
+
+## 中文对照 (zh)
+
+提示词。
+""",
+    )
+
+    blocked = _run(source, Path("reference/hell-grind/prompts.jsonl"), "--limit", "1")
+    assert blocked.returncode == 2
+    assert "explicit --output" in blocked.stderr
+
+    negative = _run(source, tmp_path / "negative.jsonl", "--limit", "-1")
+    assert negative.returncode == 2
+    assert ">= 0" in negative.stderr
+
