@@ -193,3 +193,47 @@ def test_menu_rows_map_to_a_schema_valid_decision(tmp_path):
         log, selected["variant_id"], subject=LOCAL_H3_DECISION_SUBJECT
     )
     assert decision["selected"] == selected["variant_id"]
+
+
+def test_post_process_api_workflow_does_not_beat_a_generation_workflow(tmp_path):
+    models = tmp_path / "models" / "diffusion_models"
+    _write(models / "minimax_h3_fl2va_int8.safetensors")
+    workflows = tmp_path / "workflows"
+    _write(workflows / "local-minimax-h3-t2v.json", _workflow(nodes=True))
+    _write(workflows / "local-minimax-h3-t2v_upscale_api.json", _workflow(nodes=False))
+    menu = build_local_h3_menu(
+        [models], [workflows], bundled_workflow_dir=tmp_path / "empty"
+    )
+    assert Path(menu[0]["workflow"]).name == "local-minimax-h3-t2v.json"
+    assert menu[0]["runnable"] is False
+
+
+def test_lone_post_process_workflow_leaves_the_variant_unmatched(tmp_path):
+    models = tmp_path / "models" / "diffusion_models"
+    _write(models / "minimax_h3_fl2va_int8.safetensors")
+    workflows = tmp_path / "workflows"
+    _write(workflows / "local-minimax-h3-t2v_upscale_api.json", _workflow(nodes=False))
+    menu = build_local_h3_menu(
+        [models], [workflows], bundled_workflow_dir=tmp_path / "empty"
+    )
+    assert menu[0]["workflow"] is None
+    assert menu[0]["runnable"] is False
+    assert "No matching H3 workflow" in menu[0]["setup"]
+    assert "no matching h3 workflow" in menu[0]["notes"].lower()
+
+
+def test_api_workflow_without_an_output_node_is_not_runnable(tmp_path):
+    models = tmp_path / "models" / "diffusion_models"
+    _write(models / "minimax_h3_fl2va_int8.safetensors")
+    workflows = tmp_path / "workflows"
+    _write(
+        workflows / "local-minimax-h3-t2v_api.json",
+        json.dumps({"1": {"class_type": "X", "inputs": {}}}),
+    )
+    menu = build_local_h3_menu(
+        [models], [workflows], bundled_workflow_dir=tmp_path / "empty"
+    )
+    assert menu[0]["workflow_format"] == "api"
+    assert menu[0]["output_node"] is None
+    assert menu[0]["runnable"] is False
+    assert "output node" in menu[0]["setup"]

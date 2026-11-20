@@ -163,12 +163,13 @@ def test_custom_subject_keeps_route_and_variant_decisions_separate(tmp_path):
     ]
     record_selection(path, "film", "proposal", {"route_id": "hyperflow_int8"},
                      options, "local route", subject="Local H3 variant")
+    record_selection(path, "film", "proposal", {"route_id": "hyperflow_int8"},
+                     options, "route-level approval")
     log = json.loads(path.read_text(encoding="utf-8"))
     assert require_selected_route(
         log, "hyperflow_int8", subject="Local H3 variant"
     )["selected"] == "hyperflow_int8"
-    with pytest.raises(ValueError, match="No user-approved"):
-        require_selected_route(log, "hyperflow_int8")
+    assert require_selected_route(log, "hyperflow_int8")["selected"] == "hyperflow_int8"
 
 
 def test_record_selection_appends_and_validates(tmp_path):

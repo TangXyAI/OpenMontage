@@ -76,6 +76,7 @@ installed MiniMax H3 checkpoint and let the user pick one:
 ```python
 from lib.local_h3_variants import (
     LOCAL_H3_DECISION_SUBJECT, build_local_h3_menu, render_local_h3_menu,
+    variant_option, variant_route,
 )
 
 variants = build_local_h3_menu(model_roots, workflow_roots)

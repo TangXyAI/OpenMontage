@@ -41,6 +41,7 @@ For `narrative_generated` productions, work through this chain in order. Each st
 5. **Model and route gate.** Before the first generation call, present the exact batch parameters — model id, resolution, duration, take count, and total cost — and confirm the approved decision with `lib.video_model_selection.require_selected_route(decision_log, route_id)`. If the route is a local H3 variant, read `proposal_packet.metadata.selected_variant`; its `runnable` flag must be true, and the variant decision must verify with `require_selected_route(decision_log, variant_id, subject=LOCAL_H3_DECISION_SUBJECT)`. Pass `checkpoint_name=variant["checkpoint_name"]` for HyperFlow, or `workflow_path=variant["workflow"]` plus `output_node=variant["output_node"]` for a stock API workflow. A UI-only workflow is a blocker: stop and show its export hint — never substitute HyperFlow for the variant the user chose. After the user confirms the batch, append a **second recorded decision** with `stage="assets"` so the gate verifies the confirmed parameters, not just the proposal pick:
 
    ```python
+   from lib.local_h3_variants import LOCAL_H3_DECISION_SUBJECT
    from lib.video_model_selection import record_selection, require_selected_route
 
    proposal_metadata = state.artifacts["proposal"]["proposal_packet"]["metadata"]
@@ -64,6 +65,7 @@ For `narrative_generated` productions, work through this chain in order. Each st
            for row in shortlist_options
        ],  # same option_id/label/score/reason rows as proposal
        reason=f"confirmed batch: {model_id}, {resolution}, {duration}s, {takes} takes, ${total_cost}",
+       subject=LOCAL_H3_DECISION_SUBJECT,  # local H3 variant; use the default subject for a route-level decision
    )
    ```
 

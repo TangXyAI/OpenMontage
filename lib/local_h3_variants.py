@@ -162,9 +162,9 @@ _POST_TOKENS = (
     "upscale",
     "refine",
     "dero",
-    "post",
-    "latent",
-    "spatial",
+    "latent_upscale",
+    "post_process",
+    "postprocess",
     "放大",
     "精修",
     "后期",
@@ -207,6 +207,8 @@ def _find_workflow(
         relative = _relative_workflow_path(path, roots)
         if "preset" in relative:
             continue
+        if any(token in relative for token in _POST_TOKENS):
+            continue
         score = 0
         for group, weight in token_groups:
             if any(token in relative for token in group):
@@ -219,8 +221,6 @@ def _find_workflow(
             score += 4
         workflow_format, _ = _workflow_info(path)
         score += {"api": 6, "ui": 3, "unknown": 0}.get(workflow_format, 0)
-        if any(token in relative for token in _POST_TOKENS):
-            score -= 3
         if "未测试" in relative or "untested" in relative:
             score -= 2
         candidate = (score, -len(path.name), path.name.lower(), path)
@@ -372,6 +372,8 @@ def build_local_h3_menu(
                 )
             elif workflow_format == "ui":
                 notes = "Installed; workflow found but UI-only."
+            elif workflow is None:
+                notes = "Installed; no matching H3 workflow."
             elif workflow_format == "unknown":
                 notes = "Installed; matching file is not a ComfyUI workflow."
             elif not runnable:
