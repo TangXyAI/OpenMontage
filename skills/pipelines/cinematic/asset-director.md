@@ -41,13 +41,27 @@ For `narrative_generated` productions, work through this chain in order. Each st
 5. **Model and route gate.** Before the first generation call, present the exact batch parameters — model id, resolution, duration, take count, and total cost — and confirm the approved decision with `lib.video_model_selection.require_selected_route(decision_log, route_id)`. After the user confirms the batch, append a **second recorded decision** with `stage="assets"` so the gate verifies the confirmed parameters, not just the proposal pick:
 
    ```python
-   from lib.video_model_selection import record_selection
+   from lib.video_model_selection import record_selection, require_selected_route
+
+   proposal_metadata = state.artifacts["proposal"]["proposal_packet"]["metadata"]
+   selected_route = proposal_metadata["selected_route"]
+   shortlist_options = proposal_metadata["video_model_shortlist"]
+
+   require_selected_route(decision_log, selected_route)
    record_selection(
        "projects/<project-id>/decision_log.json",
        project_id="<project-id>",
        stage="assets",
        route={"route_id": selected_route},
-       options=shortlist_options,  # same option_id/label/score/reason rows as proposal
+       options=[
+           {
+               "option_id": row["route_id"],
+               "label": f"{row['family']} — {row['route']}",
+               "score": 1.0 if row["route_id"] == selected_route else 0.5,
+               "reason": row["notes"],
+           }
+           for row in shortlist_options
+       ],  # same option_id/label/score/reason rows as proposal
        reason=f"confirmed batch: {model_id}, {resolution}, {duration}s, {takes} takes, ${total_cost}",
    )
    ```

@@ -42,7 +42,7 @@ Two explicit approvals, recorded in `decision_log` under the same
 1. **proposal** — present the family × route shortlist (capability, limits, cost,
    recommendation). The user selects the **model family + preferred route + backup
    route**. Nothing is generated yet.
-2. **assets, before the first paid generation** — confirm the exact batch parameters:
+2. **assets, before the first generation (paid or local)** — confirm the exact batch parameters:
    **model id, resolution, duration, take count, and total cost**. Only after this
    confirmation does batch generation start.
 

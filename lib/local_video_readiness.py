@@ -7,7 +7,11 @@ model roots. It never talks to the ComfyUI server, so it is safe to call
 during preflight on a machine where ComfyUI is not running yet.
 
 The result separates hard blockers (the local route cannot run) from warnings
-(optional assets that only the fast INT8 workflow needs).
+(optional assets that only the fast INT8 workflow needs). HyperFlow ships in two
+quantizations — GGUF (Q4_K_M) and INT8 (convrot safetensors) — and each is a
+separate route in the menu, so the result also carries a per-variant map. A
+machine with only the INT8 weights installed is ready for the INT8 route but not
+for the GGUF route.
 """
 
 from __future__ import annotations
@@ -36,25 +40,46 @@ REQUIRED_MODELS = (
     ("audio_vae", "audio VAE", "minimax_h3_audio_vae_fp32.safetensors"),
 )
 
-# (check name, human label, canonical pattern, required name tokens)
+# (checkpoint key, human label, canonical pattern, required name tokens)
 #
-# ModelScope basenames put the variant first — ``minimax_h3_fl2va_hyperflow_
-# flash_14b-Q4_K_M.gguf`` — so the two tokens are matched in any order rather
-# than with a single order-sensitive glob.
-REQUIRED_CHECKPOINTS = (
-    (
-        "hyperflow_fl2va_checkpoint",
-        "HyperFlow fl2va checkpoint",
-        "*hyperflow*fl2va*",
-        ("hyperflow", "fl2va"),
+# Each quantization is a distinct route in the menu, so each gets its own
+# checkpoint set. ModelScope basenames put the variant first — ``minimax_h3_
+# fl2va_hyperflow_flash_14b-Q4_K_M.gguf`` — so the tokens are matched in any
+# order rather than with a single order-sensitive glob.
+VARIANT_CHECKPOINTS = {
+    "gguf": (
+        (
+            "fl2va",
+            "HyperFlow fl2va GGUF checkpoint",
+            "*hyperflow*fl2va*.gguf",
+            ("hyperflow", "fl2va"),
+        ),
+        (
+            "ref2va",
+            "HyperFlow ref2va GGUF checkpoint",
+            "*hyperflow*ref2va*.gguf",
+            ("hyperflow", "ref2va"),
+        ),
     ),
-    (
-        "hyperflow_ref2va_checkpoint",
-        "HyperFlow ref2va checkpoint",
-        "*hyperflow*ref2va*",
-        ("hyperflow", "ref2va"),
+    "int8": (
+        (
+            "fl2va",
+            "HyperFlow fl2va INT8 checkpoint",
+            "*14b-int8_convrot.safetensors",
+            ("hyperflow", "fl2va", "14b-int8_convrot"),
+        ),
+        (
+            "ref2va",
+            "HyperFlow ref2va INT8 checkpoint",
+            "*14b-int8_convrot.safetensors",
+            ("hyperflow", "ref2va", "14b-int8_convrot"),
+        ),
     ),
-)
+}
+
+# A variant file must carry the quantization's final extension. ``.part``
+# downloads (``...gguf.part``) are incomplete and never satisfy the route.
+VARIANT_SUFFIX = {"gguf": ".gguf", "int8": ".safetensors"}
 
 SOL_VAE_CHECK = "sol_vae"
 SOL_VAE_NAME = "minimax_h3_sol_vae_int8_convrot.safetensors"
@@ -118,14 +143,27 @@ def _find_exact(
     return None
 
 
-def _find_tokens(
-    tokens: Sequence[str], roots: Sequence[Path], files_by_root: dict[Path, list[Path]]
+def _find_variant_file(
+    tokens: Sequence[str],
+    suffix: str,
+    roots: Sequence[Path],
+    files_by_root: dict[Path, list[Path]],
 ) -> Path | None:
-    """Return the first file whose basename contains every token, roots in order."""
+    """Return the first complete file for one quantization variant.
+
+    The basename must contain every token and end with the quantization's
+    extension. Partial downloads (``*.part``) are ignored because they cannot
+    be loaded.
+    """
     lowered_tokens = tuple(token.lower() for token in tokens)
+    lowered_suffix = suffix.lower()
     for root in roots:
         for path in files_by_root[root]:
             lowered_name = path.name.lower()
+            if lowered_name.endswith(".part"):
+                continue
+            if not lowered_name.endswith(lowered_suffix):
+                continue
             if all(token in lowered_name for token in lowered_tokens):
                 return path
     return None
@@ -163,9 +201,15 @@ def check_hyperflow_readiness(
             The caller probes the server; this function makes no network calls.
 
     Returns:
-        ``{"ready", "comfyui_version", "checks", "blockers", "warnings"}`` as
-        described by the task contract. ``ready`` is true only when there are
-        no blockers; warnings never prevent readiness.
+        ``{"ready", "comfyui_version", "checks", "blockers", "warnings",
+        "ready_variants", "variants"}``. ``variants`` maps each quantization
+        (``"gguf"``, ``"int8"``) to ``{"ready", "fl2va", "ref2va", "blockers"}``;
+        ``ready_variants`` lists the quantizations whose checkpoints are all
+        present. The top-level ``ready`` is true only when the shared stack is
+        healthy and at least one variant is complete. Top-level ``blockers``
+        include the missing checkpoints only when no variant is complete —
+        otherwise the per-variant ``blockers`` carry them. Warnings never
+        prevent readiness.
     """
     comfy_root = Path(comfyui_root)
     roots = _normalise_roots(model_roots)
@@ -249,11 +293,37 @@ def check_hyperflow_readiness(
         if found is None:
             blockers.append(_missing_message(label, basename, roots))
 
-    for check_name, label, pattern, tokens in REQUIRED_CHECKPOINTS:
-        found = _find_tokens(tokens, roots, files_by_root)
-        checks[check_name] = _model_check(found, label, pattern, roots)
-        if found is None:
-            blockers.append(_missing_message(label, pattern, roots))
+    variants: dict[str, dict[str, object]] = {}
+    ready_variants: list[str] = []
+    incomplete_variant_blockers: list[str] = []
+    for variant_name, variant_checks in VARIANT_CHECKPOINTS.items():
+        variant_paths: dict[str, str | None] = {"fl2va": None, "ref2va": None}
+        variant_blockers: list[str] = []
+        for checkpoint_key, label, pattern, tokens in variant_checks:
+            found = _find_variant_file(
+                tokens, VARIANT_SUFFIX[variant_name], roots, files_by_root
+            )
+            checks[f"hyperflow_{variant_name}_{checkpoint_key}_checkpoint"] = (
+                _model_check(found, label, pattern, roots)
+            )
+            if found is None:
+                variant_blockers.append(_missing_message(label, pattern, roots))
+            else:
+                variant_paths[checkpoint_key] = str(found)
+        variant_ready = all(path is not None for path in variant_paths.values())
+        variants[variant_name] = {
+            "ready": variant_ready,
+            "fl2va": variant_paths["fl2va"],
+            "ref2va": variant_paths["ref2va"],
+            "blockers": variant_blockers,
+        }
+        if variant_ready:
+            ready_variants.append(variant_name)
+        else:
+            incomplete_variant_blockers.extend(variant_blockers)
+
+    if not ready_variants:
+        blockers.extend(incomplete_variant_blockers)
 
     sol_vae = _find_exact(SOL_VAE_NAME, roots, files_by_root)
     checks[SOL_VAE_CHECK] = _model_check(sol_vae, "sol VAE", SOL_VAE_NAME, roots)
@@ -269,4 +339,6 @@ def check_hyperflow_readiness(
         "checks": checks,
         "blockers": blockers,
         "warnings": warnings,
+        "ready_variants": ready_variants,
+        "variants": variants,
     }

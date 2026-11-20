@@ -263,16 +263,68 @@ def _tool_setup(tool: Any) -> str | None:
         return None
 
 
-def build_menu(registry: Any, *, duration: int = 5) -> list[dict[str, Any]]:
-    """Build the live menu by combining the fixed catalog with registry state."""
+# Local routes split the same ``comfyui_video`` tool status, so a machine with
+# only one quantization installed would otherwise advertise both. These routes
+# resolve their availability from the readiness variant instead.
+_LOCAL_VARIANT_ROUTES = {
+    "hyperflow_gguf": "gguf",
+    "hyperflow_int8": "int8",
+}
+
+
+def _variant_readiness(
+    readiness: Mapping[str, Any] | None, variant: str
+) -> Mapping[str, Any] | None:
+    """Return one quantization's readiness entry, or None when unavailable."""
+    if not isinstance(readiness, Mapping):
+        return None
+    variants = readiness.get("variants")
+    if not isinstance(variants, Mapping):
+        return None
+    state = variants.get(variant)
+    return state if isinstance(state, Mapping) else None
+
+
+def _variant_setup(state: Mapping[str, Any]) -> str:
+    """Turn a variant's blockers into a ``setup`` hint."""
+    blockers = [str(item) for item in (state.get("blockers") or []) if str(item)]
+    if blockers:
+        return "; ".join(blockers)
+    return "Local route is not ready; check the HyperFlow readiness report"
+
+
+def build_menu(
+    registry: Any,
+    *,
+    duration: int = 5,
+    readiness: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Build the live menu by combining the fixed catalog with registry state.
+
+    ``readiness`` is the result of
+    :func:`lib.local_video_readiness.check_hyperflow_readiness`. When supplied,
+    ``hyperflow_gguf`` and ``hyperflow_int8`` take their availability from the
+    matching ``readiness["variants"]`` entry, so a missing quantization is not
+    advertised as available. ``h3_local`` and every cloud route keep reading
+    the tool status, and omitting ``readiness`` restores that behavior for all
+    local routes.
+    """
     tools = getattr(registry, "_tools", {}) or {}
     menu: list[dict[str, Any]] = []
     for route in default_routes():
         tool = tools.get(route.tool)
         status = _tool_status(tool)
         available = status == "available"
+        variant = _LOCAL_VARIANT_ROUTES.get(route.route_id)
+        variant_state = _variant_readiness(readiness, variant) if variant else None
+        if variant_state is not None:
+            available = bool(variant_state.get("ready"))
+            status = "available" if available else "unavailable"
         cost = 0.0 if route.local else _tool_cost(tool, duration)
-        setup = None if available else _tool_setup(tool)
+        if variant_state is not None:
+            setup = None if available else _variant_setup(variant_state)
+        else:
+            setup = None if available else _tool_setup(tool)
         menu.append(
             {
                 "route_id": route.route_id,

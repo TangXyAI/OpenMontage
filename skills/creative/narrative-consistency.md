@@ -34,7 +34,9 @@ in the chain is locked.
    **before locking** the sheet. Done means approved for batch, not merely generated.
 
 Record every approved asset under `assets/references/{characters,locations,props}/`
-and link it in `narrative_assets.json` / `asset_manifest.json`.
+and link it in `narrative_assets.json`. References stay in the catalog:
+`asset_manifest.json` receives only the final selected takes, never the
+reference sheets.
 
 ## Character sheets
 

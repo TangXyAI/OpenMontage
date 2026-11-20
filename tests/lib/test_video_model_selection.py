@@ -50,6 +50,85 @@ def test_menu_orders_local_first_and_reads_status():
     assert "hyperflow_gguf" in render_menu(menu)
 
 
+def _variant(ready, blockers=()):
+    return {
+        "ready": ready,
+        "fl2va": None,
+        "ref2va": None,
+        "blockers": list(blockers),
+    }
+
+
+def _readiness(*, gguf_ready=False, int8_ready=True):
+    variants = {
+        "gguf": _variant(
+            gguf_ready,
+            ()
+            if gguf_ready
+            else [
+                "Missing HyperFlow fl2va GGUF checkpoint "
+                "'*hyperflow*fl2va*.gguf' in model roots: G:/models"
+            ],
+        ),
+        "int8": _variant(
+            int8_ready,
+            ()
+            if int8_ready
+            else [
+                "Missing HyperFlow fl2va INT8 checkpoint "
+                "'*14b-int8_convrot.safetensors' in model roots: "
+                "G:/models"
+            ],
+        ),
+    }
+    ready_variants = [
+        name for name, state in variants.items() if state["ready"]
+    ]
+    return {
+        "ready": bool(ready_variants),
+        "ready_variants": ready_variants,
+        "variants": variants,
+    }
+
+
+def test_menu_uses_readiness_per_quantization_variant():
+    menu = build_menu(FakeRegistry(), readiness=_readiness())
+    gguf = next(item for item in menu if item["route_id"] == "hyperflow_gguf")
+    int8 = next(item for item in menu if item["route_id"] == "hyperflow_int8")
+    assert gguf["available"] is False
+    assert gguf["status"] == "unavailable"
+    assert "gguf" in gguf["setup"].lower()
+    assert "ComfyUI" not in gguf["setup"]
+    assert int8["available"] is True
+    assert int8["status"] == "available"
+    assert int8["setup"] is None
+
+
+def test_menu_keeps_tool_status_for_h3_local_with_readiness():
+    menu = build_menu(FakeRegistry(), readiness=_readiness())
+    h3_local = next(item for item in menu if item["route_id"] == "h3_local")
+    assert h3_local["available"] is False
+    assert "ComfyUI" in h3_local["setup"]
+
+
+def test_menu_readiness_leaves_cloud_routes_unchanged():
+    menu = build_menu(FakeRegistry(), readiness=_readiness())
+    direct = next(item for item in menu if item["route_id"] == "minimax_direct")
+    assert direct["available"] is True
+    assert direct["cost_5s"] == 0.65
+
+
+def test_menu_marks_gguf_available_when_its_variant_is_ready():
+    menu = build_menu(
+        FakeRegistry(), readiness=_readiness(gguf_ready=True, int8_ready=False)
+    )
+    gguf = next(item for item in menu if item["route_id"] == "hyperflow_gguf")
+    int8 = next(item for item in menu if item["route_id"] == "hyperflow_int8")
+    assert gguf["available"] is True and gguf["setup"] is None
+    assert int8["available"] is False
+    assert "int8" in int8["setup"].lower()
+
+
 def test_require_selected_route_raises_without_approval():
     with pytest.raises(ValueError, match="No user-approved"):
         require_selected_route({"decisions": []}, "hyperflow_gguf")
