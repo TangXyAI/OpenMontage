@@ -155,6 +155,22 @@ def test_require_selected_route_raises_without_approval():
         require_selected_route({"decisions": []}, "hyperflow_gguf")
 
 
+def test_custom_subject_keeps_route_and_variant_decisions_separate(tmp_path):
+    path = tmp_path / "decision_log.json"
+    options = [
+        {"option_id": "hyperflow_int8", "label": "HyperFlow INT8", "score": 1.0,
+         "reason": "local"}
+    ]
+    record_selection(path, "film", "proposal", {"route_id": "hyperflow_int8"},
+                     options, "local route", subject="Local H3 variant")
+    log = json.loads(path.read_text(encoding="utf-8"))
+    assert require_selected_route(
+        log, "hyperflow_int8", subject="Local H3 variant"
+    )["selected"] == "hyperflow_int8"
+    with pytest.raises(ValueError, match="No user-approved"):
+        require_selected_route(log, "hyperflow_int8")
+
+
 def test_record_selection_appends_and_validates(tmp_path):
     path = tmp_path / "decision_log.json"
     local_options = [{"option_id": "hyperflow_gguf", "label": "HyperFlow GGUF", "score": 1.0, "reason": "local first"}]

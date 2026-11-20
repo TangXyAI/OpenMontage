@@ -85,6 +85,19 @@ The result carries `variants` (`{"gguf": {...}, "int8": {...}}`, each with `read
 3. A recommendation tied to the brief's `delivery_promise` and approved budget, plus a backup route.
 4. Wait for explicit approval — "the agent picked something" is not a selection.
 
+**Local H3 variant shortlist (local-only work).** After the family/route choice, call `build_local_h3_menu` and present **every installed H3 checkpoint**, including ones whose workflow is only UI format:
+
+```python
+from lib.local_h3_variants import (
+    LOCAL_H3_DECISION_SUBJECT, build_local_h3_menu, render_local_h3_menu,
+)
+
+variants = build_local_h3_menu(model_roots, workflow_roots)
+print(render_local_h3_menu(variants))
+```
+
+Show `family`, quantization, operations, size, matching workflow, and `runnable`/`setup` for each. Wait for the user's `variant_id`; record it under `provider_selection` / `Local H3 variant` with `record_selection(..., subject=LOCAL_H3_DECISION_SUBJECT)`. Do not omit an installed variant and do not silently substitute a runnable HyperFlow variant for a different choice.
+
 **Record the choice before leaving proposal.** Write `proposal_packet.metadata.video_model_shortlist` (the menu rows the user saw) and `proposal_packet.metadata.selected_route` (the approved `route_id`), then append the decision with `record_selection` under `category: "provider_selection"`, `subject: "Video model and route"`:
 
 ```python

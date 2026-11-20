@@ -369,6 +369,26 @@ API 工作流是小文件，ModelScope 未托管，从 GitHub / HuggingFace 取�
 
 HyperFlow 权重适用 MiniMax H3 Community License；欧盟、英国、韩国、美国使用需 MiniMax 授权。菜单必须展示。
 
+### 4.8 本地 H3 变体目录
+
+`lib.local_h3_variants.py` 扫描本机 `diffusion_models` 与工作流目录，把**所有已安装的 H3 检查点**列给用户选择：
+
+| 字段 | 含义 |
+|---|---|
+| `family` | HyperFlow / DaSiWa H3 / Singularity 10Eros / Singularity / H3 Hybrid / H3 Base |
+| `quantization` | int8 / gguf / fp8 / fp16 / bf16 / nvfp4 |
+| `operations` | t2v / i2v / flf2v / ref2v |
+| `size_gb` | 检查点大小 |
+| `workflow` / `workflow_format` | 匹配的 ComfyUI 工作流及其格式（api / ui） |
+| `runnable` / `setup` | 是否可直接执行；不可执行时给出导出/安装提示 |
+
+规则：
+
+- HyperFlow 使用内置 API 工作流，`runnable = true`。
+- DaSiWa、Singularity、10Eros、H3 Hybrid 当前只有 UI 工作流：`runnable = false`，提示在 ComfyUI 中导出 API 格式。
+- 用户选择 `variant_id`，记录在 `decision_log` 的 `provider_selection` / `Local H3 variant`。
+- 只有 `runnable = true` 的变体可以进入批量 take；UI-only 必须先导出，**不得静默替换成 HyperFlow**。
+
 ---
 
 ## 5. 端到端流程

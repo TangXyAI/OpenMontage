@@ -68,6 +68,32 @@ Build the menu from live registry data:
 - `video_selector` only discovers and preflights. Execution calls the **explicit tool
   and model id the user chose** — never let selector scoring swap the route unseen.
 
+## Local H3 variants
+
+When the brief is local-only, the route row is not the whole choice. Enumerate every
+installed MiniMax H3 checkpoint and let the user pick one:
+
+```python
+from lib.local_h3_variants import (
+    LOCAL_H3_DECISION_SUBJECT, build_local_h3_menu, render_local_h3_menu,
+)
+
+variants = build_local_h3_menu(model_roots, workflow_roots)
+print(render_local_h3_menu(variants))
+```
+
+- List **every installed checkpoint**, including ones that cannot run yet. Show family,
+  quantization, supported operations, size, the matching workflow, and
+  `runnable`/`setup`.
+- HyperFlow has bundled API workflows, so its `fl2va`/`ref2va` variants are runnable.
+  Stock, hybrid, DaSiWa and Singularity variants are installed but their ComfyUI
+  workflows are UI-only on this machine; show the export hint instead of hiding them.
+- The user selects a `variant_id`. Record it under `provider_selection` /
+  `Local H3 variant` with `record_selection(..., subject=LOCAL_H3_DECISION_SUBJECT)`.
+  Only a `runnable` variant may proceed to take generation; a UI-only workflow must be
+  exported to API format first. Never substitute HyperFlow for a different variant the
+  user chose.
+
 ## Draft and final
 
 Iterate cheaply without changing the look:

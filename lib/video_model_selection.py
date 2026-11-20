@@ -382,7 +382,10 @@ def render_menu(routes: Sequence[Mapping[str, Any]]) -> str:
 
 
 def require_selected_route(
-    decision_log: Mapping[str, Any], route_id: str
+    decision_log: Mapping[str, Any],
+    route_id: str,
+    *,
+    subject: str = DECISION_SUBJECT,
 ) -> Mapping[str, Any]:
     """Return the latest approved selection, or raise if it does not match."""
     decisions = decision_log.get("decisions") or []
@@ -390,7 +393,7 @@ def require_selected_route(
         decision
         for decision in decisions
         if decision.get("category") == DECISION_CATEGORY
-        and decision.get("subject") == DECISION_SUBJECT
+        and decision.get("subject") == subject
     ]
     if not matches:
         raise ValueError("No user-approved video model selection")
@@ -445,6 +448,8 @@ def record_selection(
     route: Any,
     options: Sequence[Mapping[str, Any]],
     reason: str,
+    *,
+    subject: str = DECISION_SUBJECT,
 ) -> dict[str, Any]:
     """Append an approved video-model decision and persist it atomically."""
     log_path = Path(path)
@@ -468,7 +473,7 @@ def record_selection(
         "decision_id": _next_decision_id(decisions),
         "stage": stage,
         "category": DECISION_CATEGORY,
-        "subject": DECISION_SUBJECT,
+        "subject": subject,
         "options_considered": options_considered,
         "selected": selected_route,
         "reason": reason,
