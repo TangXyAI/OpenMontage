@@ -210,6 +210,8 @@ the enhancement commit.
 8. **Model-name portability.** The manifest records the SeedVR2 filename
    (`seedvr2_ema_3b_fp8_e4m3fn.safetensors`); another install may ship a
    different 3B FP8 file name.
-9. The pilot's `artifacts/render_report.json` still describes the earlier
-   640x352 `final.mp4`; the enhanced render's specs are recorded here and in the
-   tool's `final_review` payload.
+9. The pilot's `artifacts/render_report.json` and `artifacts/final_review.json`
+   were updated after this run to describe `final-enhanced.mp4` (1962x1080,
+   14,827,088 B) and to mark the earlier 640x352 `final.mp4` as superseded;
+   `renders/final.mp4` is still on disk for comparison. Both JSON files are
+   gitignored and schema-validated.
