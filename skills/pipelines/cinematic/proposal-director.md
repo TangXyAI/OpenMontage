@@ -355,6 +355,8 @@ For the selected concept, design the stage-by-stage plan with specific providers
 - **Video generation** — if motion-required, this is non-negotiable.
 - **Music** — must be resolved. No cinematic piece should have silence as a surprise.
 
+**Post-enhancement is not locked here.** Local post-enhancement (`face_refine` / `seedvr2_upscale` via `comfyui_enhance`) is offered at the assets stage for the user to choose; it is local and zero-cost in money, costing only time, and it is not decided or locked at proposal.
+
 ### Step 7: Cost Estimate
 
 Itemize all costs honestly. Cinematic tends to be more expensive than explainer (more generated clips, music, grade passes).

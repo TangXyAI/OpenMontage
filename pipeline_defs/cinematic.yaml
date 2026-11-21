@@ -190,6 +190,7 @@ stages:
       - pixabay_music
       - freesound_music
       - music_gen
+      - comfyui_enhance
     tools_available:
       - subtitle_gen
       - audio_enhance
@@ -203,6 +204,7 @@ stages:
       - pixabay_music
       - freesound_music
       - music_gen
+      - comfyui_enhance
     checkpoint_required: true
     human_approval_default: true
     review_focus:
@@ -225,6 +227,16 @@ stages:
         description: "User selects the video model family and route before the first generation"
         human_approval_default: true
         tools_available: [video_selector]
+      - name: enhancement_selection
+        description: "After takes are selected and before asset_manifest export, present the local post-enhancement menu (none / FaceRefine / SeedVR2 upscale)."
+        human_approval_default: true
+        tools_available: [comfyui_enhance]
+        review_focus:
+          - User selected a route before any enhancement ran
+          - Route availability was shown with blockers, not hidden
+          - FaceRefine is only applied where one dominant face exists
+          - Enhanced assets keep audio, frame rate, and duration
+          - asset_manifest records enhancement.source_path and parameters
 
   - name: edit
     skill: pipelines/cinematic/edit-director

@@ -33,6 +33,12 @@ Cuts should follow:
 
 Do not optimize only for information density.
 
+### 1b. Compose Target After Enhancement
+
+Cuts are generated from the **updated take paths** in `NarrativeAssets`; after a take is enhanced, the cut's `source` points at the enhanced media (the take id is unchanged). Note in the cut `reason` that the take was enhanced so compose and review do not mistake it for an unprocessed source.
+
+If the approved route was `seedvr2_upscale`, raise `edit_decisions.metadata.compose_target` to the enhanced resolution — short edge 1080, derived from the source aspect ratio, even dimensions. Composing back at the original size (for example 640×352) would squeeze the upscale back down and is an acceptance failure. If the user explicitly wants the original delivery resolution, **do not run the upscale in the first place**; never upscale and then compose at the source size.
+
 ### 2. Protect Strong Moments
 
 If a look, line, or gesture is doing the work, let it live. Do not over-cover it with extra inserts.
@@ -54,7 +60,7 @@ Recommended metadata keys:
 
 Cinematic edits get three finishing passes before compose. Record them under `edit_decisions.metadata.post_passes` so compose can verify they ran.
 
-- **Cleanup.** Deflicker exposure and flicker-prone generated clips, stabilise jitter where the move should be locked, remove duplicated or dead frames at take boundaries, fix popped seams between shots, and match grain across mixed sources. Cleanup never changes the editorial order — it only removes artifacts.
+- **Cleanup.** Deflicker exposure and flicker-prone generated clips, stabilise jitter where the move should be locked, remove duplicated or dead frames at take boundaries, fix popped seams between shots, and match grain across mixed sources. Cleanup never changes the editorial order — it only removes artifacts. It must not repeat or undo post-enhancement: do not re-upscale, re-sharpen, re-denoise, or re-run `FaceRefine` "for consistency". Enhancement is an upstream assets-stage step; cleanup treats the enhanced take as the source of record.
 - **Color.** Grade per scene, not per clip: one scene, one look. Match black levels, white balance, and contrast across shots that came from different models or days, then apply the approved LUT or grade profile. Keep faces and text readable; refuse a grade that crushes skin tones or title cards.
 - **Sound.** Balance dialogue/narration, ambience, and music explicitly — dialogue on top, ambience filling the space between cuts, music carrying the arc and dropping out for impact beats. Fix level jumps between scenes, remove clicks and take-boundary noise, and keep quiet moments quiet. No surprise silence and no flattened dynamics.
 

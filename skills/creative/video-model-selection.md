@@ -123,6 +123,14 @@ Iterate cheaply without changing the look:
   first; the texture and grade can shift, so the user owns that choice. Append the new
   decision; keep the superseded route in `options_considered`.
 
+## After generation: post-enhancement
+
+Model/route choice and post-enhancement are separate decisions. Once takes are selected,
+local post-enhancement is offered at the assets-stage `enhancement_selection` gate — never
+bundled into the generation route. Read `skills/creative/video-enhancement.md` for the
+`none` / `face_refine` / `seedvr2_upscale` menu, selection rules, and the `compose_target`
+requirement when upscaling.
+
 ## No silent fallback
 
 If the selected route is unavailable — ComfyUI is down, weights are missing, the route
