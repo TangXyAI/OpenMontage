@@ -88,23 +88,38 @@ def test_menu_delegates_estimate_to_the_registered_tool():
     assert menu[2]["estimated_seconds"] == 1004
 
 
-def test_menu_merges_and_deduplicates_shared_warnings():
+def test_menu_warnings_do_not_leak_across_routes():
+    seedvr2_warning = "SeedVR2 3B DiT missing; first run downloads ~3.16 GB"
     readiness = _readiness()
-    route_warning = "route warning"
-    shared_warning = "shared warning"
-    readiness["routes"]["video_upscale"]["warnings"] = [route_warning, shared_warning]
-    readiness["warnings"] = [shared_warning, "other shared warning"]
+    readiness["routes"]["video_upscale"]["warnings"] = [seedvr2_warning]
+    readiness["routes"]["face_refine"]["warnings"] = []
+    readiness["warnings"] = [seedvr2_warning]
     menu = build_menu(
         FakeRegistry({"comfyui_enhance": FakeTool()}),
         readiness,
         duration_seconds=1.0,
     )
-    warnings = next(
-        row for row in menu if row["route_id"] == "seedvr2_upscale"
-    )["warnings"]
-    assert warnings.count(shared_warning) == 1
-    assert route_warning in warnings
-    assert "other shared warning" in warnings
+    rows = {row["route_id"]: row for row in menu}
+    assert rows["face_refine"]["warnings"] == []
+    assert seedvr2_warning in rows["seedvr2_upscale"]["warnings"]
+    assert rows["none"]["warnings"] == []
+    assert rows["seedvr2_upscale"]["shared_warnings"] == []
+
+    insightface_warning = "insightface model directory not found"
+    readiness = _readiness()
+    readiness["routes"]["face_refine"]["warnings"] = [insightface_warning]
+    readiness["routes"]["video_upscale"]["warnings"] = []
+    readiness["warnings"] = [insightface_warning]
+    menu = build_menu(
+        FakeRegistry({"comfyui_enhance": FakeTool()}),
+        readiness,
+        duration_seconds=1.0,
+    )
+    rows = {row["route_id"]: row for row in menu}
+    assert insightface_warning in rows["face_refine"]["warnings"]
+    assert rows["seedvr2_upscale"]["warnings"] == []
+    assert insightface_warning not in " ".join(rows["seedvr2_upscale"]["warnings"])
+    assert rows["none"]["warnings"] == []
 
 
 def test_record_and_require_selection(tmp_path):

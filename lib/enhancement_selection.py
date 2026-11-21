@@ -131,14 +131,16 @@ def build_menu(
     :func:`lib.local_enhancement_readiness.check_enhancement_readiness`.
     ``none`` is always available. Every other route needs the registered tool,
     a running server, and a ready route; ``reason`` aggregates whatever is
-    missing. Each row carries the tool ``status`` and the route's readiness
-    ``warnings`` (merged with the shared warnings) so the agent can surface
-    things like SeedVR2's first-run ~3.16 GB DiT download before approval.
+    missing. Each row carries the tool ``status`` and **only its own** route
+    readiness ``warnings`` so the agent can surface things like SeedVR2's
+    first-run ~3.16 GB DiT download before approval. The readiness report's
+    top-level ``warnings`` is a union of route warnings, so it must never be
+    copied onto other rows: a SeedVR2 warning must not appear on ``face_refine``
+    and an insightface warning must not appear on ``seedvr2_upscale``.
+    ``shared_warnings`` is reserved for genuinely global warnings and is empty
+    today.
     """
     tools = getattr(registry, "_tools", {}) or {}
-    shared_warnings = (
-        readiness.get("warnings") if isinstance(readiness, Mapping) else []
-    ) or []
     server_running = bool(
         readiness.get("server_running") if isinstance(readiness, Mapping) else False
     )
@@ -190,10 +192,6 @@ def build_menu(
                 warnings.extend(
                     str(item) for item in (state.get("warnings") or []) if str(item)
                 )
-            for warning in shared_warnings:
-                warning_text = str(warning)
-                if warning_text and warning_text not in warnings:
-                    warnings.append(warning_text)
 
         estimated_seconds = _estimate_seconds(route.route_id, duration_seconds)
         if route.operation is not None and tool is not None:
@@ -221,6 +219,7 @@ def build_menu(
                 "available": available,
                 "reason": "; ".join(reasons),
                 "warnings": warnings,
+                "shared_warnings": [],
                 "estimated_seconds": estimated_seconds,
                 "estimate_source": route.estimate_source,
             }
