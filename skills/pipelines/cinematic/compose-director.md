@@ -93,7 +93,7 @@ Post-enhancement (`comfyui_enhance` with the approved `face_refine` or `seedvr2_
 - Do **not** re-run `comfyui_enhance` at compose, and do **not** silently replace the enhanced take with the original or with another file.
 - Do **not** silently re-enhance, re-sharpen, re-denoise, or otherwise "unify" the enhanced media, and do **not** silently swap the render path to avoid it. If the enhanced file is missing or unreadable, escalate per AGENT_GUIDE.md rather than substituting.
 - Before rendering, verify `edit_decisions.metadata.compose_target` matches the enhanced resolution when `seedvr2_upscale` ran (short edge 1080, derived from the source aspect ratio, even dimensions). If it is still at the original resolution, stop and return to edit — composing at the source size undoes the upscale.
-- Record the check in `render_report`: the applied `compose_target`, whether an enhancement was present (route and operation), and confirmation that no re-enhancement ran in compose.
+- Record the check in `render_report.metadata.enhancement_check`: the applied `compose_target`, whether an enhancement was present (route and operation), and confirmation that no re-enhancement ran in compose.
 
 ### 1. Use Frame Treatment Deliberately
 

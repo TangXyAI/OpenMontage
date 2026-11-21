@@ -30,11 +30,11 @@ Route → operation mapping: `face_refine` → `operation="face_refine"`, `seedv
 
 ## Gate flow (cinematic `assets.enhancement_selection`)
 
-Task 9 adds this sub-stage to `pipeline_defs/cinematic.yaml` on this branch; it is **not** present in the tree before that task lands, and it is `human_approval_default: true`. It sits after takes are selected and before `asset_manifest` export.
+The gate is defined in `pipeline_defs/cinematic.yaml` (the `assets.enhancement_selection` sub-stage) and `skills/pipelines/cinematic/asset-director.md`. It is `human_approval_default: true`, and it sits after takes are selected and before the final `asset_manifest` export. It applies to **every** cinematic assets run, source-led and narrative alike.
 
-1. **Abilities.** Discover the registry and inspect `comfyui_enhance` (`get_status()`); run `lib.local_enhancement_readiness.check_enhancement_readiness` so node-pack, model, version, and server problems are known before any menu is shown. Never hide a blocked route.
-2. **Menu.** Call `lib.enhancement_selection.build_menu(registry, readiness, duration_seconds=...)`. Present all three routes in order — `none`, `face_refine`, `seedvr2_upscale` — with `available`, `reason`, `estimated_seconds`, and `estimate_source`. A blocked route stays visible with its blockers.
-3. **Decision.** The user picks one route for the approved shot range. `build_menu` rows are **not** schema-ready `options_considered` items: they use `route_id` and carry extra keys (`available`, `tool`, `operation`, `estimated_seconds`, `estimate_source`), while `record_selection` requires `option_id`, `label`, `score`, and `reason` per option and the decision schema rejects extras. Map them explicitly before calling:
+1. **Abilities.** Discover the registry and inspect `comfyui_enhance` (`get_status()`): when the tool status is not `available` (the server is not running or unreachable), pass `server_running=False` to `lib.local_enhancement_readiness.check_enhancement_readiness`. That report makes node-pack, model, version, and server problems known before any menu is shown. Never hide a blocked route.
+2. **Menu.** Call `lib.enhancement_selection.build_menu(registry, readiness, duration_seconds=...)`. Present all three routes in order — `none`, `face_refine`, `seedvr2_upscale` — with `status`, `available`, `reason`, `warnings`, `estimated_seconds`, and `estimate_source`. A blocked route stays visible with its blockers. **Surface every row's `warnings` verbatim** — especially SeedVR2's first-run ~3.16 GB DiT download warning, which is a real part of the time cost the user is approving.
+3. **Decision.** The user picks one route for the approved shot range. `build_menu` rows are **not** schema-ready `options_considered` items: they use `route_id` and carry extra keys (`status`, `available`, `warnings`, `tool`, `operation`, `estimated_seconds`, `estimate_source`), while `record_selection` requires `option_id`, `label`, `score`, and `reason` per option and the decision schema rejects extras. Map them explicitly before calling:
 
    ```python
    options = [
@@ -79,4 +79,4 @@ Task 9 adds this sub-stage to `pipeline_defs/cinematic.yaml` on this branch; it 
 
 ## Known boundary
 
-`comfyui_enhance` is discoverable by every pipeline, but only the `cinematic` pipeline gains the `enhancement_selection` sub-stage and the `require_selected_route` check (added by Task 9 on this branch; not present before it). Other pipelines that want enhancement must add an equivalent gate; the tool itself does not enforce one.
+`comfyui_enhance` is discoverable by every pipeline, but only the `cinematic` pipeline has the `enhancement_selection` sub-stage and the `require_selected_route` check, defined in `pipeline_defs/cinematic.yaml` and `skills/pipelines/cinematic/asset-director.md`. Other pipelines that want enhancement must add an equivalent gate; the tool itself does not enforce one.

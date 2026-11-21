@@ -128,7 +128,7 @@ FaceRefine-Plus (RTX VSR path) is blocked on this machine: `nvidia-vfx` has no c
 
 ## Decision gate is upstream of this tool
 
-`comfyui_enhance` does **not** accept a decision log and does not check route approval. The `cinematic` pipeline's `enhancement_selection` sub-stage owns that gate through `lib/enhancement_selection.py`: `build_menu` → user-approved `record_selection` → `require_selected_route` → execute. That sub-stage is added by Task 9 on this branch and is **not** present in the tree before it lands. Other pipelines can discover the tool, but none has the gate yet — that is a known boundary. Never run enhancement silently or outside the gate.
+`comfyui_enhance` does **not** accept a decision log and does not check route approval. The `cinematic` pipeline's `enhancement_selection` sub-stage owns that gate through `lib/enhancement_selection.py`: `build_menu` → user-approved `record_selection` → `require_selected_route` → execute. The gate is defined in `pipeline_defs/cinematic.yaml` and `skills/pipelines/cinematic/asset-director.md`. Other pipelines can discover the tool, but none has the gate yet — that is a known boundary. Never run enhancement silently or outside the gate.
 
 ## Pre-call checklist
 

@@ -20,7 +20,7 @@ feature (Task 10). Every number below comes from the tool results, `ffprobe`, or
 Readiness (`check_enhancement_readiness`, `server_running=True`):
 
 - `ready: true`, `ready_routes: ["face_refine", "video_upscale"]`
-- All 16 checks `ok` (ComfyUI version >= 0.43.0, both custom node packs, every
+- All 13 checks `ok` (ComfyUI version >= 0.43.0, both custom node packs, every
   FaceRefine and SeedVR2 model file)
 - `blockers: []`, `warnings: []`
 

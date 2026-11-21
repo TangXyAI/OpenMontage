@@ -42,6 +42,16 @@ def test_asset_director_wires_the_gate():
     assert "require_selected_route" in text
 
 
+def test_asset_director_has_general_gate_for_every_cinematic_run():
+    text = (ROOT / "skills" / "pipelines" / "cinematic" / "asset-director.md").read_text(encoding="utf-8")
+    assert "## Post-enhancement gate (all cinematic runs)" in text
+    gate = text.split("## Post-enhancement gate (all cinematic runs)", 1)[1]
+    assert "source-led" in gate.lower()
+    assert "withhold" in gate.lower()
+    assert "seedvr2_upscale" in gate
+    assert "re-export" in gate.lower()
+
+
 def test_edit_director_raises_compose_target():
     text = (ROOT / "skills" / "pipelines" / "cinematic" / "edit-director.md").read_text(encoding="utf-8")
     assert "compose_target" in text
@@ -52,3 +62,14 @@ def test_compose_director_forbids_re_enhancement():
     text = (ROOT / "skills" / "pipelines" / "cinematic" / "compose-director.md").read_text(encoding="utf-8")
     assert "comfyui_enhance" in text
     assert "silently" in text.lower() or "静默" in text
+    assert "render_report.metadata.enhancement_check" in text
+
+
+def test_skills_do_not_carry_branch_build_history():
+    for relative in (
+        "skills/creative/video-enhancement.md",
+        ".agents/skills/video-enhancement/SKILL.md",
+    ):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "Task 9" not in text, relative
+        assert "not present before" not in text, relative
