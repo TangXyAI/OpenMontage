@@ -413,6 +413,24 @@ class ComfyUIEnhance(BaseTool):
         source_probe = self._probe_media(source)
         source_fps = _as_float(source_probe.get("video_fps"))
 
+        # face_refine binds the source frame rate into node 23. Falling back
+        # to the bundled 24 fps would silently retime a non-24 fps source, so
+        # refuse to run when the probe could not supply fps/duration.
+        if operation == "face_refine" and (
+            source_fps is None
+            or _as_float(source_probe.get("duration_seconds")) is None
+        ):
+            return ToolResult(
+                success=False,
+                error=(
+                    "face_refine needs the source frame rate and duration from "
+                    "ffprobe, but the source video could not be probed (ffprobe "
+                    "is missing or the file is unreadable). Install ffprobe and "
+                    "verify the input is a valid video: the source frame rate is "
+                    "bound into node 23 and must not fall back to 24 fps."
+                ),
+            )
+
         # face_refine loads the source in place (VHS_LoadVideoPath accepts an
         # absolute path) and uploads both reference images; SeedVR2's
         # LoadVideo only resolves files in ComfyUI's input folder.
@@ -454,10 +472,6 @@ class ComfyUIEnhance(BaseTool):
                 ref_names=ref_names,
                 output_prefix=f"om_enhance/{operation}/{uuid.uuid4().hex[:12]}",
             )
-            # ffprobe unavailable: keep the bundled workflow's frame rate
-            # rather than binding 0.0, and let validation skip.
-            if operation == "face_refine" and not source_fps:
-                patches["23"].pop("frame_rate", None)
             workflow = ComfyUIClient.patch_workflow(workflow, patches)
         except Exception as exc:
             return ToolResult(
@@ -502,13 +516,15 @@ class ComfyUIEnhance(BaseTool):
             )
 
         output_probe = self._probe_media(downloaded)
+        warnings: list[str] = []
+        if not output_probe:
+            warnings.append("media_probe_unavailable")
         validation_error = self._validate_output_media(source_probe, output_probe)
         if validation_error:
             _discard(partial)
             return ToolResult(success=False, error=validation_error)
 
         ssim = self._compute_ssim(source, downloaded)
-        warnings: list[str] = []
         if ssim is not None and ssim > _SSIM_UNCHANGED_THRESHOLD:
             warnings.append("output_virtually_unchanged")
 
@@ -522,8 +538,14 @@ class ComfyUIEnhance(BaseTool):
             )
 
         models = self._merged_models(inputs)
-        timing = dict(getattr(client, "last_timing", None) or {})
-        timing["wall_s"] = round(time.perf_counter() - started, 3)
+        client_timing = dict(getattr(client, "last_timing", None) or {})
+        timing = {
+            "queue_seconds": client_timing.get("client_queue_and_poll_s"),
+            "execution_seconds": client_timing.get("comfy_prompt_exec_s"),
+            "download_seconds": client_timing.get("download_s"),
+            "wall_seconds": round(time.perf_counter() - started, 3),
+            "client_timing": client_timing,
+        }
         result_data = {
             "operation": operation,
             "output_path": str(output),

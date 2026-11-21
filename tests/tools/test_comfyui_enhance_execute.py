@@ -111,6 +111,51 @@ def test_virtually_unchanged_output_returns_warning(tmp_path, monkeypatch):
     assert "output_virtually_unchanged" in result.data["validation"]["warnings"]
 
 
+def test_face_refine_fails_when_source_fps_unavailable(tmp_path, monkeypatch):
+    inputs = _inputs(tmp_path, "face_refine")
+    refs = []
+    for name in ("face.png", "wardrobe.png"):
+        path = tmp_path / name
+        path.write_bytes(b"img")
+        refs.append(str(path))
+    inputs |= {"reference_image_paths": refs, "prompt": "subject_definitions: ..."}
+    tool = ComfyUIEnhance(client=FakeClient())
+    monkeypatch.setattr(tool, "_probe_media", lambda _: {})
+    result = tool.execute(inputs)
+    assert not result.success
+    assert "ffprobe" in result.error.lower() or "frame rate" in result.error.lower()
+
+
+def test_timing_uses_design_keys(tmp_path, monkeypatch):
+    class Timed(FakeClient):
+        last_timing = {
+            "client_queue_and_poll_s": 1.5,
+            "comfy_prompt_exec_s": 2.5,
+            "download_s": 0.5,
+        }
+
+    tool = ComfyUIEnhance(client=Timed())
+    monkeypatch.setattr(tool, "_probe_media", _media_ok)
+    monkeypatch.setattr(tool, "_compute_ssim", lambda *_: 0.9)
+    result = tool.execute(_inputs(tmp_path))
+    assert result.success, result.error
+    timing = result.data["timing"]
+    assert timing["queue_seconds"] == 1.5
+    assert timing["execution_seconds"] == 2.5
+    assert timing["download_seconds"] == 0.5
+    assert "wall_seconds" in timing
+    assert timing["client_timing"]["download_s"] == 0.5
+
+
+def test_upscale_warns_when_output_probe_unavailable(tmp_path, monkeypatch):
+    tool = ComfyUIEnhance(client=FakeClient())
+    monkeypatch.setattr(tool, "_probe_media", lambda _: {})
+    monkeypatch.setattr(tool, "_compute_ssim", lambda *_: None)
+    result = tool.execute(_inputs(tmp_path))
+    assert result.success, result.error
+    assert "media_probe_unavailable" in result.data["validation"]["warnings"]
+
+
 def test_unavailable_server_fails_without_fallback(tmp_path):
     class Down(FakeClient):
         def is_available(self):
