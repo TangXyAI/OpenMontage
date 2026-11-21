@@ -464,29 +464,51 @@ class ComfyUIClient:
         dest.write_bytes(resp.content)
         return dest
 
-    def upload_image(self, local_path: Path, name: str) -> str:
-        """Upload a local image so it can be referenced by LoadImage nodes.
+    def _upload_input(
+        self, local_path: Path, name: str, mime_type: str, *, noun: str = "image"
+    ) -> str:
+        """POST a local file to ComfyUI's input folder and validate the reply.
 
-        Returns the server-side filename.
+        Both images and videos use ComfyUI's ``/upload/image`` endpoint; the
+        form field is always named ``image``. Shared so every input type gets
+        the same response and path-traversal validation.
         """
         with open(local_path, "rb") as f:
             resp = requests.post(
                 f"{self.server_url}/upload/image",
-                files={"image": (name, f, "image/png")},
+                files={"image": (name, f, mime_type)},
                 timeout=30,
             )
         resp.raise_for_status()
         data = resp.json()
         if data.get("type", "input") != "input":
-            raise ComfyUIError("Uploaded image was not stored in the input folder")
+            raise ComfyUIError(f"Uploaded {noun} was not stored in the input folder")
         name = data.get("name")
         subfolder = data.get("subfolder") or ""
         if not isinstance(name, str) or not name or not isinstance(subfolder, str):
-            raise ComfyUIError("Invalid image upload response")
+            raise ComfyUIError(f"Invalid {noun} upload response")
         relative = PurePosixPath(subfolder) / name
         if relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
-            raise ComfyUIError("Invalid image path in upload response")
+            raise ComfyUIError(f"Invalid {noun} path in upload response")
         return str(relative)
+
+    def upload_image(self, local_path: Path, name: str) -> str:
+        """Upload a local image so it can be referenced by LoadImage nodes.
+
+        Returns the server-side filename.
+        """
+        return self._upload_input(local_path, name, "image/png", noun="image")
+
+    def upload_input_file(
+        self, local_path: Path, name: str, mime_type: str = "application/octet-stream"
+    ) -> str:
+        """Upload a local video (or other binary input) to ComfyUI's input dir.
+
+        ``LoadVideo`` only resolves files that live in the server's input
+        folder, so callers bind the returned server-side name rather than a
+        local absolute path. Returns the server-side filename.
+        """
+        return self._upload_input(local_path, name, mime_type, noun="file")
 
     def bind_workflow(self, workflow: dict, bindings: dict, values: dict) -> dict:
         """Apply explicit input bindings to a custom API workflow.
