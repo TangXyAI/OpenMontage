@@ -16,6 +16,8 @@ Source of evidence: `projects/_h3-api-export/STATUS.md`.
 
 Measured SeedVR2 run: 1080×1916, 73 frames / 3.04 s, H.264 + AAC, roughly 9 minutes of processing after the ~3.16 GB first-run model download. The menu estimates SeedVR2 at `30 + 178 × duration_seconds`; FaceRefine's estimate is a placeholder.
 
+Route → operation mapping: `face_refine` → `operation="face_refine"`, `seedvr2_upscale` → `operation="video_upscale"` (the menu row already carries this in `row["operation"]`). `none` runs nothing.
+
 ## Selection rules
 
 1. **One dominant protagonist and the face is large enough** (guide: face height ≥ 120 px) → `face_refine`. Sample three frames before deciding; the tool does not detect or size faces.
@@ -28,13 +30,29 @@ Measured SeedVR2 run: 1080×1916, 73 frames / 3.04 s, H.264 + AAC, roughly 9 min
 
 ## Gate flow (cinematic `assets.enhancement_selection`)
 
-The gate sits after takes are selected and before `asset_manifest` export. It is `human_approval_default: true`.
+Task 9 adds this sub-stage to `pipeline_defs/cinematic.yaml` on this branch; it is **not** present in the tree before that task lands, and it is `human_approval_default: true`. It sits after takes are selected and before `asset_manifest` export.
 
 1. **Abilities.** Discover the registry and inspect `comfyui_enhance` (`get_status()`); run `lib.local_enhancement_readiness.check_enhancement_readiness` so node-pack, model, version, and server problems are known before any menu is shown. Never hide a blocked route.
 2. **Menu.** Call `lib.enhancement_selection.build_menu(registry, readiness, duration_seconds=...)`. Present all three routes in order — `none`, `face_refine`, `seedvr2_upscale` — with `available`, `reason`, `estimated_seconds`, and `estimate_source`. A blocked route stays visible with its blockers.
-3. **Decision.** The user picks one route for the approved shot range. Call `record_selection(path, project_id, stage, route_id, options, reason)` with the full menu as `options`. The decision is keyed `(category="enhancement_selection", subject="Post-enhancement route")`, is `user_visible`/`user_approved`, and is **latest-wins**: a re-entry appends a new decision covering the full current range; do not edit or reword the old one. The shot subset belongs in the `reason`/`options_considered` text.
+3. **Decision.** The user picks one route for the approved shot range. `build_menu` rows are **not** schema-ready `options_considered` items: they use `route_id` and carry extra keys (`available`, `tool`, `operation`, `estimated_seconds`, `estimate_source`), while `record_selection` requires `option_id`, `label`, `score`, and `reason` per option and the decision schema rejects extras. Map them explicitly before calling:
+
+   ```python
+   options = [
+       {
+           "option_id": row["route_id"],
+           "label": row["label"],
+           "score": 1.0 if row["available"] else 0.0,
+           "reason": row["reason"],
+           **({"rejected_because": row["reason"]} if not row["available"] else {}),
+       }
+       for row in menu
+   ]
+   record_selection(path, project_id, stage, route_id, options, reason)
+   ```
+
+   Passing raw menu rows raises `ValueError` (the selectable id is absent). The decision is keyed `(category="enhancement_selection", subject="Post-enhancement route")`, is `user_visible`/`user_approved`, and is **latest-wins**: a re-entry appends a new decision covering the full current range; do not edit or reword the old one. The shot subset belongs in the `reason`/`options_considered` text.
 4. **Qualification (FaceRefine only).** Before running, sample three frames with `frame_sampler` and confirm one main face at the recommended size; show the sampled frames at the gate. Pick the per-shot protagonist, take exactly two approved reference images, and write the full `subject_definitions` prompt from the approved character description plus shot context. If the face is too small, switch the decision to `seedvr2_upscale` or `none`.
-5. **Apply.** Call `require_selected_route(decision_log, route_id)` (raises unless the latest approved decision matches), then `comfyui_enhance.execute(...)` per shot with an `output_path` under `projects/<project_id>/assets/video/enhanced/<shot_id>-<take_id>-<operation>.mp4`. Do not run any route the user did not approve, and do not run silently.
+5. **Apply.** Call `require_selected_route(decision_log, route_id)` (raises unless the latest approved decision matches), then `comfyui_enhance.execute(...)` per shot with `operation` from the mapping above and an `output_path` under `projects/<project_id>/assets/video/enhanced/<shot_id>-<take_id>-<operation>.mp4`. Do not run any route the user did not approve, and do not run silently.
 6. **Re-export.** Call `NarrativeAssets.apply_enhancement(shot_id, take_id, path, duration_seconds=..., enhancement=...)` so the selected take's `path` becomes the enhanced file (the take id is unchanged, and the original path is preserved as `metadata.original_path`). Then regenerate `asset_manifest` and `edit_decisions`, rewrite the assets and edit checkpoints, and re-request approval. Without the re-export, `video_compose` rejects cuts whose paths no longer match the narrative selection.
 
 ## Acceptance checks
@@ -43,10 +61,11 @@ The gate sits after takes are selected and before `asset_manifest` export. It is
 - **Frame rate:** unchanged (face_refine binds `23.frame_rate` to the probed source fps; SeedVR2 wires fps from the source graph).
 - **Duration:** within one frame at the source fps.
 - **SSIM:** `data.validation.ssim` shows a real change. Above `0.999` the tool succeeds with `output_virtually_unchanged` — surface that warning and let the user accept, change route, or skip.
+- **Probe availability:** when ffprobe cannot read the downloaded output, `data.validation.warnings` contains `media_probe_unavailable`. Media validation is then skipped, but **the take is still replaced** — surface this warning and inspect the file manually before accepting it.
 - **Identity:** side-by-side source vs. enhanced for FaceRefine. Identity drift is the known FaceRefine risk; if it is unacceptable, use SeedVR2 for that shot.
 - **Geometry/background:** no warping, edge crawl, or flicker at batch seams (`temporal_overlap`).
 - **`compose_target`:** when `seedvr2_upscale` is used, raise `edit_decisions.metadata.compose_target` to the enhanced resolution (short edge 1080, derived from the source aspect ratio, even dimensions). Composing back at 640×352 would undo the upscale and is an acceptance failure. If the user explicitly wants the original delivery resolution, skip the upscale instead.
-- **Provenance:** record `operation`, model filenames, parameters, `workflow_hash_sha256`, and `source_path` on the take's enhancement metadata.
+- **Provenance:** the manifest `enhancement` object accepts only `operation`, a single `model` string, `source_path`, `parameters`, and `workflow_hash_sha256`. Put the tool result's `model` there (SeedVR2 DiT for `video_upscale`, FaceRefine UNET for `face_refine`), `source_path` = the original selected take, and `operation` from the mapping. The full `models` dict and the `workflow` filename are not allowed in the manifest — keep them in the tool result and cite them in the decision `reason`.
 
 ## Prohibitions
 
@@ -60,4 +79,4 @@ The gate sits after takes are selected and before `asset_manifest` export. It is
 
 ## Known boundary
 
-`comfyui_enhance` is discoverable by every pipeline, but only the `cinematic` pipeline wires the `enhancement_selection` sub-stage and the `require_selected_route` check. Other pipelines that want enhancement must add an equivalent gate; the tool itself does not enforce one.
+`comfyui_enhance` is discoverable by every pipeline, but only the `cinematic` pipeline gains the `enhancement_selection` sub-stage and the `require_selected_route` check (added by Task 9 on this branch; not present before it). Other pipelines that want enhancement must add an equivalent gate; the tool itself does not enforce one.

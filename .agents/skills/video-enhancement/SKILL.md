@@ -18,6 +18,8 @@ This tool is local and zero-cost in API spend; the only cost is wall-clock time 
 
 Both workflows are bundled API-format graphs under `tools/_comfyui/workflows/`; see `ENHANCE_PROVENANCE.md` there for upstream sources, local patches, default model filenames, and licensing. The source video is never modified: the enhanced file is written to `output_path` (which must stay inside `project_dir`).
 
+Route → operation mapping (the menu's `route_id` is not the tool's `operation`): `face_refine` route → `operation="face_refine"`; `seedvr2_upscale` route → `operation="video_upscale"`; `none` runs nothing. Menu rows expose the correct value as `row["operation"]`.
+
 ## FaceRefine — node map and bindable inputs
 
 Node `"23"` (`VHS_VideoCombine`) is the only output node. The tool patches the following nodes:
@@ -63,7 +65,7 @@ Default model filenames: `seedvr2_dit=seedvr2_ema_3b_fp8_e4m3fn.safetensors`, `s
 
 | Input | Default | Node | Meaning / guidance |
 |---|---|---|---|
-| `denoise` | `0.4` | FaceRefine `16` | The key FaceRefine dial. Below ~0.3 barely changes the face; above ~0.6 drifts identity and texture. Start at 0.4. |
+| `denoise` | `0.4` | FaceRefine `16` | The key FaceRefine dial. Working guidance, **not measured** (STATUS.md has one FaceRefine run and no denoise sweep): below ~0.3 the face may barely change, above ~0.6 identity and texture may drift. Start at 0.4 and compare identity. |
 | `face_select` | `largest_face` | FaceRefine `2` | Which face the tracker crops. `largest_face` fixes only the largest face in frame; everyone else is untouched. `select_index` is not exposed by the tool; the bundled default is `0`. |
 | `identity_threshold` | `0.28` | FaceRefine `2` | Insightface tracking threshold. Lower is more permissive across occlusion/turns; higher keeps a stricter identity lock. |
 | `face_denoise_multiplier` | `1.0` | FaceRefine `31` | Multiplies denoise for both small and large faces. Keep `1.0` for faces around ~180 px; lower it for very large faces to avoid over-refining. |
@@ -81,6 +83,7 @@ Default model filenames: `seedvr2_dit=seedvr2_ema_3b_fp8_e4m3fn.safetensors`, `s
 - **`23.frame_rate` (FaceRefine) must be bound to the source fps** read by ffprobe. The bundled default of `24` is a placeholder only. Never let a non-24 fps source run against the 24 fps default — it silently retimes the output. If ffprobe cannot supply fps **and** duration, `face_refine` refuses to run; install/fix ffprobe and retry instead of accepting a 24 fps fallback.
 - **Audio is carried by the source.** FaceRefine node `23` takes audio from node `1`'s audio output (original audio); SeedVR2 node `24` takes audio from node `22`. The tool validates that the output's audio-stream count equals the source's and fails on a change.
 - **Media validation before replacement:** output fps must match the source within `0.01`; duration must match within one frame (`1 / fps`); an empty or missing output fails. A `.partial.mp4` sibling is used and only a validated artifact is moved into place, so an existing output is never overwritten by a failed run.
+- **Probe-unavailable warning:** when ffprobe cannot read the downloaded output, `data.validation.warnings` gets `media_probe_unavailable`. Validation is then skipped, but the run still succeeds and **the take is still replaced** — the gate must surface the warning and require a manual inspect before accepting the file.
 - **SSIM is measured** across the whole clip (output scaled back to source dimensions first, so an upscale is comparable). It is reported in `data.validation.ssim`. A mean SSIM above `0.999` adds the warning `output_virtually_unchanged` — this usually means no face was detected or the enhancement had no effect. It is **success with a warning**, not a failure; the gate must show it and let the user decide.
 
 ## Failure modes
@@ -97,6 +100,7 @@ Default model filenames: `seedvr2_dit=seedvr2_ema_3b_fp8_e4m3fn.safetensors`, `s
 | Non-24 fps source | `23.frame_rate` would fall back to 24 | Bind the probed source fps. For `face_refine`, a source that cannot be probed (fps or duration missing) is a hard error. |
 | Reference/image validation error | Not exactly two refs, missing file, or empty prompt | Supply exactly two existing reference images and a non-empty `prompt`. |
 | Output media validation error | Audio streams, fps, or duration changed, or the output is empty | Do not replace the take. Inspect the ComfyUI server-side output and the error; retry from the source. |
+| Output probe unavailable (`media_probe_unavailable`) | ffprobe cannot read the downloaded output | Success with a warning; media validation was skipped but the take was replaced. Surface the warning and inspect the file manually before accepting it. |
 | `output_path` rejected | Path escapes `project_dir` | Write under `projects/<project_id>/` (for example `assets/video/enhanced/`). |
 
 Quality limits the tool cannot measure: face presence/size, identity drift, and geometric wobble need a human/agent side-by-side check. Sample frames before running (see the Layer 2 gate) — the tool does not detect or size faces.
@@ -124,7 +128,7 @@ FaceRefine-Plus (RTX VSR path) is blocked on this machine: `nvidia-vfx` has no c
 
 ## Decision gate is upstream of this tool
 
-`comfyui_enhance` does **not** accept a decision log and does not check route approval. The `cinematic` pipeline's `enhancement_selection` sub-stage owns that gate through `lib/enhancement_selection.py`: `build_menu` → user-approved `record_selection` → `require_selected_route` → execute. Other pipelines can discover the tool, but only `cinematic` has the gate — that is a known boundary. Never run enhancement silently or outside the gate.
+`comfyui_enhance` does **not** accept a decision log and does not check route approval. The `cinematic` pipeline's `enhancement_selection` sub-stage owns that gate through `lib/enhancement_selection.py`: `build_menu` → user-approved `record_selection` → `require_selected_route` → execute. That sub-stage is added by Task 9 on this branch and is **not** present in the tree before it lands. Other pipelines can discover the tool, but none has the gate yet — that is a known boundary. Never run enhancement silently or outside the gate.
 
 ## Pre-call checklist
 
@@ -138,6 +142,7 @@ FaceRefine-Plus (RTX VSR path) is blocked on this machine: `nvidia-vfx` has no c
 
 ## Provenance and licensing
 
-- Record `workflow`, `workflow_hash_sha256`, `models`, `parameters`, and `source_asset_path` from the tool result alongside the take.
+- The asset manifest's `enhancement` object accepts only `operation`, a single `model` string, `source_path`, `parameters`, and `workflow_hash_sha256`. Map it from the tool result: `operation` = the executed operation; `model` = the single `ToolResult.model` (FaceRefine UNET or SeedVR2 DiT); `source_path` = the original selected take; `parameters` = `provenance.parameters`; `workflow_hash_sha256` = `provenance.workflow_hash_sha256`.
+- The full `provenance.models` dict and the `workflow` filename do **not** fit the manifest schema (`additionalProperties: false`). Keep them in the tool result and cite the model filenames in the decision `reason` instead of dropping them.
 - H3 FaceRefine is driven by MiniMax H3 weights under the **MiniMax H3 Community License**; use in the EU, UK, South Korea, and the US requires MiniMax authorization. The `ComfyUI-H3-FaceRefine` code itself is MIT.
 - SeedVR2 code is Apache-2.0; its weights follow the upstream model terms. The repository bundles workflow JSON only — no weights or media.
