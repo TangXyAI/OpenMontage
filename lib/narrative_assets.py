@@ -118,6 +118,8 @@ class NarrativeAssets:
                 for key in ("seed", "prompt", "model", "provider"):
                     if key in take["metadata"]:
                         item[key] = take["metadata"][key]
+                if "enhancement" in take.get("metadata", {}):
+                    item["enhancement"] = take["metadata"]["enhancement"]
                 assets.append(item)
         selection = {shot_id: shot["selected"] for shot_id, shot in self.data["shots"].items() if shot.get("selected")}
         return {"version": "1.0", "assets": assets, "metadata": {"narrative_selection": selection}}
@@ -127,6 +129,21 @@ class NarrativeAssets:
         if not shot or take_id not in shot["takes"]:
             raise ValueError(f"Unknown shot or take: {shot_id}/{take_id}")
         shot["selected"] = take_id
+        self._save()
+
+    def apply_enhancement(self, shot_id: str, take_id: str, path: str, *, duration_seconds: float, enhancement: dict[str, Any]) -> None:
+        shot = self.data["shots"].get(shot_id)
+        if not shot or shot.get("selected") != take_id or take_id not in shot.get("takes", {}):
+            raise ValueError(f"Enhancement requires the selected take: {shot_id}/{take_id}")
+        if duration_seconds <= 0:
+            raise ValueError("Enhanced take needs a positive duration")
+        media = self._media(path)
+        take = shot["takes"][take_id]
+        metadata = take.setdefault("metadata", {})
+        metadata.setdefault("original_path", take["path"])
+        take["path"] = media
+        take["duration_seconds"] = duration_seconds
+        metadata["enhancement"] = dict(enhancement)
         self._save()
 
     def edit_decisions(self, shot_ids: list[str], render_runtime: str) -> dict[str, Any]:
