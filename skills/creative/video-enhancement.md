@@ -10,17 +10,19 @@ Source of evidence: `projects/_h3-api-export/STATUS.md`.
 
 | Route | What it does | Strength | Weakness | When |
 |---|---|---|---|---|
-| `face_refine` (H3 FaceRefine) | Tracks and refines one face, then stitches it back with the original audio | Sharpest facial features and skin | Slight identity drift; fixes only **the largest face** in frame | One protagonist, face large enough (see below) |
+| `face_refine` (H3 FaceRefine) | Tracks and refines one face, then stitches it back with the original audio | Sharpest facial features and skin | Identity drift grows with denoise (visible at 0.4; much closer at 0.2–0.3); fixes only **the largest face** in frame | One protagonist, face large enough (see below) |
 | `seedvr2_upscale` (SeedVR2 3B FP8) | Whole-frame detail upscale to a target short edge (default 1080) | Most natural, identity closest to source, works on group/wide shots | Detail sharpness below FaceRefine; about **3 minutes per second of video** | Ensembles, wide shots, small faces, or when overall detail matters |
 | `none` | No enhancement | Fast, safe | — | Default when unsure |
 
 Measured SeedVR2 run: 1080×1916, 73 frames / 3.04 s, H.264 + AAC, roughly 9 minutes of processing after the ~3.16 GB first-run model download. The menu estimates SeedVR2 at `30 + 178 × duration_seconds`; FaceRefine's estimate is a placeholder.
 
+FaceRefine denoise calibration (smoke clip, same refs/prompt/seed): 0.2 / 0.3 / 0.4 / 0.5 → SSIM 0.991 / 0.990 / 0.989 / 0.988. The face-crop comparison shows 0.2 closest to the source identity and head pose, 0.3 the practical sharpening default, 0.4 visibly sharper but a similar-different face, and 0.5 no extra gain over 0.4. For identity-sensitive hero shots start at **0.25–0.3** and compare frames before accepting.
+
 Route → operation mapping: `face_refine` → `operation="face_refine"`, `seedvr2_upscale` → `operation="video_upscale"` (the menu row already carries this in `row["operation"]`). `none` runs nothing.
 
 ## Selection rules
 
-1. **One dominant protagonist and the face is large enough** (guide: face height ≥ 120 px) → `face_refine`. Sample three frames before deciding; the tool does not detect or size faces.
+1. **One dominant protagonist and the face is large enough** (guide: face height ≥ 120 px) → `face_refine`. Sample three frames before deciding; the tool does not detect or size faces. Use `denoise` 0.25–0.3 for identity-sensitive shots; reserve 0.4 for cases where sharpness matters more than exact identity and the user has compared frames.
 2. **Ensemble, wide shot, small faces, no clear protagonist, or overall detail needed** → `seedvr2_upscale`.
 3. **Neither is a legal choice.** `none` is always available and is the correct answer when the take is already good, the gain is marginal, or the user declines the time cost.
 4. **Never use enhancement to rescue a take chosen for the wrong reason.** Re-select the take instead.
