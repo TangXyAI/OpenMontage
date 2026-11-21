@@ -215,3 +215,29 @@ the enhancement commit.
    14,827,088 B) and to mark the earlier 640x352 `final.mp4` as superseded;
    `renders/final.mp4` is still on disk for comparison. Both JSON files are
    gitignored and schema-validated.
+
+## Follow-up — full 1080p pass through the real gate (2026-11-21)
+
+After the s1-only pilot, the `assets.enhancement_selection` gate was re-entered
+end-to-end exactly as `asset-director.md` describes: readiness → menu → user
+selected `seedvr2_upscale` for `s2` + `s3` → decision `d-010` recorded →
+per-take upscale → `apply_enhancement` → manifest/edit re-export → renewed
+assets approval → recompose. `face_refine` stayed visible in the menu but was
+withheld: the pilot has no approved character sheets and both shots are
+multi-person frames.
+
+| Shot | Output | Duration | SSIM | Wall |
+|---|---|---|---|---|
+| s2 | 1962x1080, 24 fps, one AAC | 6.584 s | 0.970181 | 1,167.8 s |
+| s3 | 1962x1080, 24 fps, one AAC | 7.292 s | 0.973073 | 1,276.9 s |
+
+- Decision: `d-010`, category `enhancement_selection`, selected
+  `seedvr2_upscale`, reason "approved: s2 + s3 only; s1 already enhanced;
+  face_refine withheld (no approved character sheets, multi-person frames)".
+- Checks: assets `completed` with fresh approval; edit `completed`; compose
+  `completed`. `require_selected_route` verified against `d-010`.
+- Final: `renders/final-enhanced-all.mp4` — 1962x1080, 24 fps, 480 frames,
+  20.021 s, one AAC 48 kHz stereo stream, 17,954,631 B; compose wall 14.21 s;
+  final review `pass`.
+- This supersedes limitation 5 above: all three selected takes are now native
+  1962x1080, so no cut is an FFmpeg upscale of a 640x352 master.
