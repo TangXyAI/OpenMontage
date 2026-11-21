@@ -16,12 +16,27 @@ for the GGUF route.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from pathlib import Path
 
-MIN_COMFYUI_VERSION = (0, 43, 0)
-MIN_COMFYUI_VERSION_TEXT = "0.43.0"
+from lib.comfyui_readiness import (
+    MIN_COMFYUI_VERSION,
+    MIN_COMFYUI_VERSION_TEXT,
+    find_exact_file,
+    missing_message,
+    model_check,
+    normalise_roots,
+    read_comfyui_version,
+    roots_text,
+    version_tuple,
+    walk_files,
+)
+
+__all__ = [
+    "MIN_COMFYUI_VERSION",
+    "MIN_COMFYUI_VERSION_TEXT",
+    "check_hyperflow_readiness",
+]
 
 REQUIRED_CUSTOM_NODES = (
     "comfyui-hyperflow-flash",
@@ -84,64 +99,6 @@ VARIANT_SUFFIX = {"gguf": ".gguf", "int8": ".safetensors"}
 SOL_VAE_CHECK = "sol_vae"
 SOL_VAE_NAME = "minimax_h3_sol_vae_int8_convrot.safetensors"
 
-_VERSION_PATTERN = re.compile(r'__version__\s*=\s*"([^"]+)"')
-
-
-def _normalise_roots(model_roots: Sequence[str | Path] | str | Path) -> list[Path]:
-    """Accept one root or a sequence of roots and return a list of paths."""
-    if isinstance(model_roots, (str, Path)):
-        return [Path(model_roots)]
-    return [Path(root) for root in model_roots]
-
-
-def _read_version(version_file: Path) -> str | None:
-    """Return ``__version__`` from a ComfyUI version file, or None."""
-    try:
-        text = version_file.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    match = _VERSION_PATTERN.search(text)
-    return match.group(1) if match else None
-
-
-def _version_tuple(version: str) -> tuple[int, int, int]:
-    """Turn a dotted version into three comparable integers."""
-    numbers = [int(part) for part in re.findall(r"\d+", version)]
-    padded = (numbers + [0, 0, 0])[:3]
-    return (padded[0], padded[1], padded[2])
-
-
-def _walk_files(root: Path) -> list[Path]:
-    """List the files under a model root, tolerating missing/unreadable roots."""
-    if not root.is_dir():
-        return []
-    try:
-        return [path for path in root.rglob("*") if path.is_file()]
-    except OSError:
-        return []
-
-
-def _roots_text(roots: Sequence[Path]) -> str:
-    if not roots:
-        return "(no model roots configured)"
-    return ", ".join(str(root) for root in roots)
-
-
-def _missing_message(label: str, expected: str, roots: Sequence[Path]) -> str:
-    return f"Missing {label} '{expected}' in model roots: {_roots_text(roots)}"
-
-
-def _find_exact(
-    basename: str, roots: Sequence[Path], files_by_root: dict[Path, list[Path]]
-) -> Path | None:
-    """Return the first file whose basename matches, searching roots in order."""
-    target = basename.lower()
-    for root in roots:
-        for path in files_by_root[root]:
-            if path.name.lower() == target:
-                return path
-    return None
-
 
 def _find_variant_file(
     tokens: Sequence[str],
@@ -167,22 +124,6 @@ def _find_variant_file(
             if all(token in lowered_name for token in lowered_tokens):
                 return path
     return None
-
-
-def _model_check(
-    found: Path | None, label: str, expected: str, roots: Sequence[Path]
-) -> dict[str, object]:
-    if found is not None:
-        return {
-            "ok": True,
-            "path": str(found),
-            "detail": f"Found {label}: {found}",
-        }
-    return {
-        "ok": False,
-        "path": None,
-        "detail": _missing_message(label, expected, roots),
-    }
 
 
 def check_hyperflow_readiness(
@@ -212,14 +153,14 @@ def check_hyperflow_readiness(
         prevent readiness.
     """
     comfy_root = Path(comfyui_root)
-    roots = _normalise_roots(model_roots)
+    roots = normalise_roots(model_roots)
 
     checks: dict[str, dict[str, object]] = {}
     blockers: list[str] = []
     warnings: list[str] = []
 
     version_file = comfy_root / "comfyui_version.py"
-    version = _read_version(version_file)
+    version = read_comfyui_version(version_file)
     if version is None:
         version_ok = False
         version_detail = (
@@ -231,7 +172,7 @@ def check_hyperflow_readiness(
             f"required >= {MIN_COMFYUI_VERSION_TEXT}"
         )
     else:
-        version_ok = _version_tuple(version) >= MIN_COMFYUI_VERSION
+        version_ok = version_tuple(version) >= MIN_COMFYUI_VERSION
         if version_ok:
             version_detail = (
                 f"ComfyUI {version} satisfies >= {MIN_COMFYUI_VERSION_TEXT}"
@@ -285,13 +226,13 @@ def check_hyperflow_readiness(
             "HyperFlow generation"
         )
 
-    files_by_root = {root: _walk_files(root) for root in roots}
+    files_by_root = {root: walk_files(root) for root in roots}
 
     for check_name, label, basename in REQUIRED_MODELS:
-        found = _find_exact(basename, roots, files_by_root)
-        checks[check_name] = _model_check(found, label, basename, roots)
+        found = find_exact_file(basename, roots, files_by_root)
+        checks[check_name] = model_check(found, label, basename, roots)
         if found is None:
-            blockers.append(_missing_message(label, basename, roots))
+            blockers.append(missing_message(label, basename, roots))
 
     variants: dict[str, dict[str, object]] = {}
     ready_variants: list[str] = []
@@ -304,10 +245,10 @@ def check_hyperflow_readiness(
                 tokens, VARIANT_SUFFIX[variant_name], roots, files_by_root
             )
             checks[f"hyperflow_{variant_name}_{checkpoint_key}_checkpoint"] = (
-                _model_check(found, label, pattern, roots)
+                model_check(found, label, pattern, roots)
             )
             if found is None:
-                variant_blockers.append(_missing_message(label, pattern, roots))
+                variant_blockers.append(missing_message(label, pattern, roots))
             else:
                 variant_paths[checkpoint_key] = str(found)
         variant_ready = all(path is not None for path in variant_paths.values())
@@ -325,12 +266,12 @@ def check_hyperflow_readiness(
     if not ready_variants:
         blockers.extend(incomplete_variant_blockers)
 
-    sol_vae = _find_exact(SOL_VAE_NAME, roots, files_by_root)
-    checks[SOL_VAE_CHECK] = _model_check(sol_vae, "sol VAE", SOL_VAE_NAME, roots)
+    sol_vae = find_exact_file(SOL_VAE_NAME, roots, files_by_root)
+    checks[SOL_VAE_CHECK] = model_check(sol_vae, "sol VAE", SOL_VAE_NAME, roots)
     if sol_vae is None:
         warnings.append(
             f"Optional sol VAE '{SOL_VAE_NAME}' not found in model roots: "
-            f"{_roots_text(roots)}; only the fast INT8 workflow needs it"
+            f"{roots_text(roots)}; only the fast INT8 workflow needs it"
         )
 
     return {
