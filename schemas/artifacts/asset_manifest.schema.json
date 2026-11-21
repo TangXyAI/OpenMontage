@@ -50,6 +50,18 @@
               "review_notes": { "type": "string" }
             },
             "additionalProperties": false
+          },
+          "enhancement": {
+            "type": "object",
+            "required": ["operation", "model", "source_path"],
+            "properties": {
+              "operation": {"enum": ["face_refine", "video_upscale"]},
+              "model": {"type": "string"},
+              "source_path": {"type": "string"},
+              "parameters": {"type": "object"},
+              "workflow_hash_sha256": {"type": "string"}
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
