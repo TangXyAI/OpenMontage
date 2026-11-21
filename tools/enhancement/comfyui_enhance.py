@@ -30,6 +30,7 @@ from tools.base_tool import (
     ExecutionMode,
     ToolResult,
     ToolStability,
+    ToolStatus,
     ToolTier,
     ToolRuntime,
 )
@@ -75,11 +76,28 @@ def _parse_frame_rate(value: Any) -> float | None:
 
 
 def _discard(path: Path) -> None:
-    """Best-effort removal of an incomplete artifact."""
+    """Best-effort removal of an incomplete artifact and its siblings.
+
+    A multi-artifact download writes ``<stem>.partial_000<ext>`` and
+    similar siblings next to the requested partial, so removing only the
+    exact partial path would leave them behind.
+    """
+    path = Path(path)
     try:
-        Path(path).unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
     except OSError:
         pass
+    try:
+        siblings = list(path.parent.glob(f"{path.stem}*"))
+    except OSError:
+        return
+    for sibling in siblings:
+        if sibling == path or ".partial" not in sibling.name:
+            continue
+        try:
+            sibling.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _media_summary(probe: dict[str, Any]) -> dict[str, Any]:
@@ -136,7 +154,7 @@ class ComfyUIEnhance(BaseTool):
 
     input_schema = {
         "type": "object",
-        "required": ["operation", "input_path", "output_path"],
+        "required": ["operation", "input_path", "output_path", "project_dir"],
         "properties": {
             "operation": {
                 "type": "string",
@@ -253,6 +271,36 @@ class ComfyUIEnhance(BaseTool):
     def __init__(self, client: Any = None) -> None:
         self._client = client or ComfyUIClient(capability="enhance")
 
+    def get_status(self) -> ToolStatus:
+        """Report availability from the server, not from a static constant.
+
+        The tool is only usable while a ComfyUI server answers; a stopped
+        server is ``UNAVAILABLE`` even though every local file is present.
+        """
+        if not self._client.is_available():
+            return ToolStatus.UNAVAILABLE
+        return ToolStatus.AVAILABLE
+
+    def estimate_runtime(self, inputs: dict[str, Any]) -> float:
+        """Estimate wall-clock seconds from the clip duration."""
+        duration: float | None = None
+        for key in ("duration_seconds", "duration"):
+            if inputs.get(key) is None:
+                continue
+            try:
+                duration = float(inputs[key])
+            except (TypeError, ValueError):
+                continue
+            break
+        if duration is None or duration < 0:
+            return 0.0
+        operation = inputs.get("operation")
+        if operation == "face_refine":
+            return 120.0 + 60.0 * duration
+        if operation == "video_upscale":
+            return 30.0 + 178.0 * duration
+        return 0.0
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -261,7 +309,9 @@ class ComfyUIEnhance(BaseTool):
     def _validate_inputs(inputs: dict[str, Any]) -> str | None:
         """Validate an enhancement request without touching the network.
 
-        Returns an error string or ``None``.
+        Returns an error string or ``None``. Malformed value types (a list
+        where a path belongs, a non-integer timeout, and so on) are reported
+        as errors instead of escaping as exceptions.
         """
         operation = inputs.get("operation")
         if operation not in _OPERATIONS:
@@ -269,30 +319,57 @@ class ComfyUIEnhance(BaseTool):
                 f"Unknown operation {operation!r}; expected one of "
                 f"{', '.join(_OPERATIONS)}."
             )
-        for field in ("input_path", "output_path"):
+        for field in ("input_path", "output_path", "project_dir"):
             if not str(inputs.get(field) or "").strip():
                 return f"comfyui_enhance requires {field} for operation {operation!r}."
 
         if operation == "face_refine":
             refs = inputs.get("reference_image_paths") or []
-            if len(refs) != 2:
+            if isinstance(refs, (str, bytes)) or not isinstance(
+                refs, (list, tuple)
+            ):
+                return (
+                    "face_refine reference_image_paths must be a list of exactly "
+                    "two image paths (identity close-up and wardrobe/full-body "
+                    "reference)."
+                )
+            try:
+                count = len(refs)
+            except TypeError:
+                return (
+                    "face_refine reference_image_paths must be a list of exactly "
+                    "two image paths."
+                )
+            if count != 2:
                 return (
                     "face_refine requires exactly two reference images "
                     "(identity close-up and wardrobe/full-body reference); "
-                    f"got {len(refs)}."
+                    f"got {count}."
                 )
             if not str(inputs.get("prompt") or "").strip():
                 return "face_refine requires a non-empty prompt."
 
-        project_dir = inputs.get("project_dir")
-        if project_dir:
-            try:
-                output = Path(inputs["output_path"]).resolve()
-                root = Path(project_dir).resolve()
-            except (OSError, ValueError) as exc:
-                return f"Could not resolve output_path against project_dir: {exc}"
-            if not output.is_relative_to(root):
-                return "output_path must stay inside project_dir (the project workspace)."
+        raw_timeout = inputs.get("timeout_seconds")
+        try:
+            timeout = int(7200 if raw_timeout is None else raw_timeout)
+        except (OverflowError, TypeError, ValueError):
+            return "timeout_seconds must be a positive integer (for example 7200)."
+        if timeout <= 0:
+            return "timeout_seconds must be a positive integer (for example 7200)."
+
+        try:
+            source = Path(inputs["input_path"]).resolve()
+            output = Path(inputs["output_path"]).resolve()
+            root = Path(inputs["project_dir"]).resolve()
+        except (OSError, ValueError, TypeError) as exc:
+            return f"Could not resolve input_path/output_path against project_dir: {exc}"
+        if source == output:
+            return (
+                "input_path and output_path must differ; enhancement writes a new "
+                "file and never overwrites the selected take."
+            )
+        if not output.is_relative_to(root):
+            return "output_path must stay inside project_dir (the project workspace)."
         return None
 
     # ------------------------------------------------------------------
@@ -522,7 +599,10 @@ class ComfyUIEnhance(BaseTool):
         validation_error = self._validate_output_media(source_probe, output_probe)
         if validation_error:
             _discard(partial)
-            return ToolResult(success=False, error=validation_error)
+            return ToolResult(
+                success=False,
+                error=f"{validation_error} Downloaded artifact: {downloaded}",
+            )
 
         ssim = self._compute_ssim(source, downloaded)
         if ssim is not None and ssim > _SSIM_UNCHANGED_THRESHOLD:

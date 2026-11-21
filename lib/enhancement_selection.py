@@ -131,9 +131,14 @@ def build_menu(
     :func:`lib.local_enhancement_readiness.check_enhancement_readiness`.
     ``none`` is always available. Every other route needs the registered tool,
     a running server, and a ready route; ``reason`` aggregates whatever is
-    missing.
+    missing. Each row carries the tool ``status`` and the route's readiness
+    ``warnings`` (merged with the shared warnings) so the agent can surface
+    things like SeedVR2's first-run ~3.16 GB DiT download before approval.
     """
     tools = getattr(registry, "_tools", {}) or {}
+    shared_warnings = (
+        readiness.get("warnings") if isinstance(readiness, Mapping) else []
+    ) or []
     server_running = bool(
         readiness.get("server_running") if isinstance(readiness, Mapping) else False
     )
@@ -142,10 +147,14 @@ def build_menu(
     for route in ROUTES:
         available = True
         reasons: list[str] = []
+        tool = None
+        status = "available"
+        warnings: list[str] = []
 
         if route.tool is not None:
             tool = tools.get(route.tool)
             if tool is None:
+                status = "unavailable"
                 available = False
                 reasons.append(f"{route.tool} tool is not registered")
             else:
@@ -166,15 +175,41 @@ def build_menu(
                 reasons.append(
                     f"No readiness report for {route.operation} route"
                 )
-            elif not state.get("ready"):
-                available = False
-                blockers = [
-                    str(item) for item in (state.get("blockers") or []) if str(item)
-                ]
-                if blockers:
-                    reasons.extend(blockers)
-                else:
-                    reasons.append(f"{route.operation} route is not ready")
+            else:
+                if not state.get("ready"):
+                    available = False
+                    blockers = [
+                        str(item)
+                        for item in (state.get("blockers") or [])
+                        if str(item)
+                    ]
+                    if blockers:
+                        reasons.extend(blockers)
+                    else:
+                        reasons.append(f"{route.operation} route is not ready")
+                warnings.extend(
+                    str(item) for item in (state.get("warnings") or []) if str(item)
+                )
+            for warning in shared_warnings:
+                warning_text = str(warning)
+                if warning_text and warning_text not in warnings:
+                    warnings.append(warning_text)
+
+        estimated_seconds = _estimate_seconds(route.route_id, duration_seconds)
+        if route.operation is not None and tool is not None:
+            estimator = getattr(tool, "estimate_runtime", None)
+            if callable(estimator):
+                try:
+                    estimated_seconds = round(
+                        estimator(
+                            {
+                                "operation": route.operation,
+                                "duration_seconds": duration_seconds,
+                            }
+                        )
+                    )
+                except Exception:
+                    pass
 
         menu.append(
             {
@@ -182,11 +217,11 @@ def build_menu(
                 "label": route.label,
                 "tool": route.tool,
                 "operation": route.operation,
+                "status": status,
                 "available": available,
                 "reason": "; ".join(reasons),
-                "estimated_seconds": _estimate_seconds(
-                    route.route_id, duration_seconds
-                ),
+                "warnings": warnings,
+                "estimated_seconds": estimated_seconds,
                 "estimate_source": route.estimate_source,
             }
         )

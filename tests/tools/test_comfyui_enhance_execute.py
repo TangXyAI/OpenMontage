@@ -1,12 +1,11 @@
-import json
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from tools.base_tool import ToolResult
-from tools.enhancement.comfyui_enhance import ComfyUIEnhance
+from tools.base_tool import ToolStatus
+from tools.enhancement.comfyui_enhance import ComfyUIEnhance, _discard
 
 
 class FakeClient:
@@ -92,6 +91,7 @@ def test_audio_loss_fails_validation(tmp_path, monkeypatch):
     result = tool.execute(_inputs(tmp_path))
     assert not result.success
     assert "audio" in result.error.lower()
+    assert "out.partial.mp4" in result.error
 
 
 def test_frame_rate_change_fails_validation(tmp_path, monkeypatch):
@@ -234,3 +234,34 @@ def test_unavailable_server_fails_without_fallback(tmp_path):
     result = ComfyUIEnhance(client=Down()).execute(_inputs(tmp_path))
     assert not result.success
     assert "not reachable" in result.error
+
+
+def test_get_status_reflects_server_availability():
+    class Down(FakeClient):
+        def is_available(self):
+            return False
+
+    assert ComfyUIEnhance(client=Down()).get_status() == ToolStatus.UNAVAILABLE
+    assert ComfyUIEnhance(client=FakeClient()).get_status() == ToolStatus.AVAILABLE
+
+
+def test_non_integer_timeout_returns_error_instead_of_raising(tmp_path):
+    result = ComfyUIEnhance(client=FakeClient()).execute(
+        _inputs(tmp_path) | {"timeout_seconds": "soon"}
+    )
+    assert not result.success
+    assert "timeout_seconds" in result.error
+
+
+def test_discard_removes_multi_artifact_partials_only(tmp_path):
+    partial = tmp_path / "out.partial.mp4"
+    sibling = tmp_path / "out.partial_000.mp4"
+    unrelated = tmp_path / "other.mp4"
+    for path in (partial, sibling, unrelated):
+        path.write_bytes(b"x")
+
+    _discard(partial)
+
+    assert not partial.exists()
+    assert not sibling.exists()
+    assert unrelated.exists()

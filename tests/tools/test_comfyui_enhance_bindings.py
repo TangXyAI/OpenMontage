@@ -1,10 +1,4 @@
-import pytest
-
 from tools.enhancement.comfyui_enhance import ComfyUIEnhance
-
-
-def _tool(tmp_path):
-    return ComfyUIEnhance(client=object())
 
 
 def _face_inputs(tmp_path):
@@ -48,6 +42,66 @@ def test_output_must_stay_inside_project_dir(tmp_path):
     inputs = _face_inputs(tmp_path)
     inputs["output_path"] = str(tmp_path / "outside.mp4")
     assert "project" in ComfyUIEnhance._validate_inputs(inputs)
+
+
+def test_project_dir_is_required(tmp_path):
+    inputs = _face_inputs(tmp_path)
+    inputs.pop("project_dir")
+    error = ComfyUIEnhance._validate_inputs(inputs)
+    assert error is not None
+    assert "project_dir" in error
+
+
+def test_input_and_output_path_must_differ(tmp_path):
+    inputs = _face_inputs(tmp_path)
+    inputs["output_path"] = inputs["input_path"]
+    error = ComfyUIEnhance._validate_inputs(inputs)
+    assert error is not None
+    assert "input_path" in error
+    assert "output_path" in error
+
+
+def test_malformed_reference_list_is_rejected_without_raising(tmp_path):
+    inputs = _face_inputs(tmp_path)
+    inputs["reference_image_paths"] = 5
+    error = ComfyUIEnhance._validate_inputs(inputs)
+    assert error is not None
+    assert "reference_image_paths" in error
+
+
+def test_malformed_path_type_is_rejected_without_raising(tmp_path):
+    inputs = _face_inputs(tmp_path)
+    inputs["output_path"] = ["not", "a", "path"]
+    error = ComfyUIEnhance._validate_inputs(inputs)
+    assert isinstance(error, str)
+
+
+def test_timeout_seconds_must_be_a_positive_integer(tmp_path):
+    inputs = _face_inputs(tmp_path)
+    inputs["timeout_seconds"] = "soon"
+    assert "timeout_seconds" in ComfyUIEnhance._validate_inputs(inputs)
+
+    inputs["timeout_seconds"] = 0
+    assert "timeout_seconds" in ComfyUIEnhance._validate_inputs(inputs)
+
+    inputs["timeout_seconds"] = float("inf")
+    assert "timeout_seconds" in ComfyUIEnhance._validate_inputs(inputs)
+
+
+def test_estimate_runtime_uses_duration_seconds_and_duration():
+    tool = ComfyUIEnhance(client=object())
+    assert tool.estimate_runtime(
+        {"operation": "face_refine", "duration_seconds": 3.0}
+    ) == 300.0
+    assert tool.estimate_runtime(
+        {"operation": "video_upscale", "duration_seconds": 3.0}
+    ) == 564.0
+    assert tool.estimate_runtime({"operation": "video_upscale", "duration": 3.0}) == 564.0
+    assert tool.estimate_runtime(
+        {"operation": "face_refine", "duration_seconds": 0.0}
+    ) == 120.0
+    assert tool.estimate_runtime({"operation": "sharpen", "duration": 3.0}) == 0.0
+    assert tool.estimate_runtime({}) == 0.0
 
 
 def test_face_refine_binds_every_required_node(tmp_path):

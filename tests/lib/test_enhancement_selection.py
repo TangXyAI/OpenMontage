@@ -53,6 +53,60 @@ def test_duration_drives_estimate():
     assert menu[1]["estimate_source"] == "placeholder"
 
 
+def test_menu_rows_carry_status_and_route_warnings():
+    readiness = _readiness()
+    warning = "SeedVR2 3B DiT missing; first run downloads ~3.16 GB"
+    readiness["routes"]["video_upscale"]["warnings"] = [warning]
+    menu = build_menu(
+        FakeRegistry({"comfyui_enhance": FakeTool()}),
+        readiness,
+        duration_seconds=3.04,
+    )
+    rows = {row["route_id"]: row for row in menu}
+
+    seedvr2 = rows["seedvr2_upscale"]
+    assert seedvr2["status"] == "available"
+    assert warning in seedvr2["warnings"]
+    assert "3.16 GB" in " ".join(seedvr2["warnings"])
+
+    none = rows["none"]
+    assert none["status"] == "available"
+    assert none["warnings"] == []
+
+
+def test_menu_delegates_estimate_to_the_registered_tool():
+    class EstimatingTool(FakeTool):
+        def estimate_runtime(self, inputs):
+            return 1000.0 + inputs["duration_seconds"]
+
+    menu = build_menu(
+        FakeRegistry({"comfyui_enhance": EstimatingTool()}),
+        _readiness(),
+        duration_seconds=4.0,
+    )
+    assert menu[1]["estimated_seconds"] == 1004
+    assert menu[2]["estimated_seconds"] == 1004
+
+
+def test_menu_merges_and_deduplicates_shared_warnings():
+    readiness = _readiness()
+    route_warning = "route warning"
+    shared_warning = "shared warning"
+    readiness["routes"]["video_upscale"]["warnings"] = [route_warning, shared_warning]
+    readiness["warnings"] = [shared_warning, "other shared warning"]
+    menu = build_menu(
+        FakeRegistry({"comfyui_enhance": FakeTool()}),
+        readiness,
+        duration_seconds=1.0,
+    )
+    warnings = next(
+        row for row in menu if row["route_id"] == "seedvr2_upscale"
+    )["warnings"]
+    assert warnings.count(shared_warning) == 1
+    assert route_warning in warnings
+    assert "other shared warning" in warnings
+
+
 def test_record_and_require_selection(tmp_path):
     path = tmp_path / "decision_log.json"
     options = [
@@ -71,5 +125,7 @@ def test_record_and_require_selection(tmp_path):
 
 
 def test_record_rejects_route_outside_options(tmp_path):
+    path = tmp_path / "d.json"
     with pytest.raises(ValueError):
-        record_selection(str(tmp_path / "d.json"), "p", "assets", "missing", [{"option_id": "none"}], "x")
+        record_selection(str(path), "p", "assets", "missing", [{"option_id": "none"}], "x")
+    assert not path.exists()

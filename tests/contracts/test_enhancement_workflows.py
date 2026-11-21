@@ -25,6 +25,8 @@ def test_face_refine_workflow_is_clean_api_format():
     assert workflow["1"]["inputs"]["video"] == ""
     assert workflow["6"]["inputs"]["image"] == ""
     assert workflow["7"]["inputs"]["image"] == ""
+    assert workflow["9"]["inputs"]["prompt"] == ""
+    assert workflow["23"]["inputs"]["frame_rate"] == 24
     assert workflow["23"]["inputs"]["filename_prefix"] == "om_enhance/face_refine"
 
 
@@ -43,3 +45,4 @@ def test_workflows_have_no_machine_specific_paths():
         assert not re.search(r"[A-Za-z]:[\\/]", text), name
         assert "_h3-api-export" not in text, name
         assert "smoke_" not in text, name
+        assert text.endswith("\n"), name
