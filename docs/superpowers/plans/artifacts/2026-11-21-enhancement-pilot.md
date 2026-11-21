@@ -72,10 +72,10 @@ Integration used `NarrativeAssets.apply_enhancement`, `write_checkpoint`, and
 | ComfyUI execution | 1,168.9 s (19 min 29 s) |
 | Download | 2.2 s |
 | **Wall time** | **1,178.6 s (19 min 39 s)** — 161x realtime |
-| Peak VRAM | 13,218 MiB of 16,376 MiB (81%), 3 s samples |
+| Peak VRAM | 13,539 MiB of 16,376 MiB (82.7%), 387 samples at 3 s |
 | Output | 1962x1080, 24 fps, 175 frames, 7.292 s, H.264 + AAC stereo, 19,322,241 B (21.2 Mbps) |
 | Audio | 1 stream, preserved (same count as source) |
-| SSIM vs source | **0.940630** (Y 0.918629, U 0.981870, V 0.987357), independently reproduced with the bundled `ssim` filter |
+| SSIM vs source | **0.940630** (Y 0.918629, U 0.981870, V 0.987397), independently reproduced with the bundled `ssim` filter |
 | Validation warnings | none |
 
 Frame inspection (1.0 s and 3.5 s, source scaled to 1962x1080 for comparison):
@@ -139,7 +139,7 @@ original takes and the approved 7.0 / 6.0 / 7.0 trim.
   true`, `human_approved: true`; `edit` `completed`.
 - Decision log entry **`d-009`**: category `enhancement_selection`, subject
   "Post-enhancement route", options `none` (0.5) / `face_refine` (0.6, rejected —
-  s1 has two children, FaceRefine only tracks the largest face) /
+  s1 frames four children, FaceRefine only tracks the largest face) /
   `seedvr2_upscale` (1.0), selected `seedvr2_upscale`, `user_approved: true`,
   reason "approved: s1 only; s2/s3 keep original takes".
 
@@ -188,8 +188,8 @@ the enhancement commit.
 
 ## Known limitations
 
-1. **FaceRefine is largest-face only.** On `s1` (two children) it would refine
-   one boy and leave the other untouched, which is why the pilot rejected it.
+1. **FaceRefine is largest-face only.** On `s1` (four children in frame) it would refine
+   one child and leave the other three untouched, which is why the pilot rejected it.
    Keep it for single-dominant-face shots.
 2. **Identity drift is real at denoise 0.4.** FaceRefine buys sharpness with a
    recognisable but different face, and can shift head pose at clip starts.
