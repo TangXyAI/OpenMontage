@@ -704,9 +704,32 @@ class ComfyUIEnhance(BaseTool):
 
     @staticmethod
     def _compute_ssim(source: Path, output: Path) -> float | None:
-        """Whole-clip SSIM between source and output; ``None`` when unmeasurable."""
+        """Whole-clip SSIM between source and output; ``None`` when unmeasurable.
+
+        An upscale changes dimensions and ffmpeg's ``ssim`` filter rejects
+        unequal sizes, so the output is scaled back to the source resolution
+        inside the filter graph before comparison. Without probe dimensions
+        the plain filter is attempted as-is.
+        """
         if shutil.which("ffmpeg") is None:
             return None
+
+        probe = ComfyUIEnhance._probe_media(source)
+        width = probe.get("video_width")
+        height = probe.get("video_height")
+        if (
+            isinstance(width, int)
+            and isinstance(height, int)
+            and width > 0
+            and height > 0
+        ):
+            filter_args = [
+                "-filter_complex",
+                f"[1:v]scale={width}:{height}:flags=bicubic[o];[0:v][o]ssim",
+            ]
+        else:
+            filter_args = ["-lavfi", "ssim"]
+
         try:
             proc = subprocess.run(
                 [
@@ -717,8 +740,7 @@ class ComfyUIEnhance(BaseTool):
                     str(source),
                     "-i",
                     str(output),
-                    "-lavfi",
-                    "ssim",
+                    *filter_args,
                     "-f",
                     "null",
                     "-",

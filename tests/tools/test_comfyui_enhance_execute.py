@@ -1,5 +1,9 @@
 import json
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from tools.base_tool import ToolResult
 from tools.enhancement.comfyui_enhance import ComfyUIEnhance
@@ -154,6 +158,71 @@ def test_upscale_warns_when_output_probe_unavailable(tmp_path, monkeypatch):
     result = tool.execute(_inputs(tmp_path))
     assert result.success, result.error
     assert "media_probe_unavailable" in result.data["validation"]["warnings"]
+
+
+def test_validation_failure_preserves_existing_output(tmp_path, monkeypatch):
+    inputs = _inputs(tmp_path)
+    output = Path(inputs["output_path"])
+    output.write_bytes(b"ORIGINAL")
+    tool = ComfyUIEnhance(client=FakeClient())
+    sources = {
+        "src": {"duration_seconds": 7.0, "video_fps": 24.0, "audio_streams": 1},
+        "out": {"duration_seconds": 7.0, "video_fps": 24.0, "audio_streams": 0},
+    }
+    paths = iter(["src", "out"])
+    monkeypatch.setattr(tool, "_probe_media", lambda _: sources[next(paths)])
+    monkeypatch.setattr(tool, "_compute_ssim", lambda *_: 0.9)
+    result = tool.execute(inputs)
+    assert not result.success
+    assert output.read_bytes() == b"ORIGINAL"
+    assert list(output.parent.glob("*.partial*")) == []
+
+
+def test_success_replaces_existing_output_and_cleans_partial(tmp_path, monkeypatch):
+    inputs = _inputs(tmp_path)
+    output = Path(inputs["output_path"])
+    output.write_bytes(b"ORIGINAL")
+    tool = ComfyUIEnhance(client=FakeClient())
+    monkeypatch.setattr(tool, "_probe_media", _media_ok)
+    monkeypatch.setattr(tool, "_compute_ssim", lambda *_: 0.9)
+    result = tool.execute(inputs)
+    assert result.success, result.error
+    assert output.read_bytes() == b"out"
+    assert list(output.parent.glob("*.partial*")) == []
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg and ffprobe are required for a real SSIM check",
+)
+def test_compute_ssim_handles_different_dimensions(tmp_path):
+    def make_clip(name, size):
+        path = tmp_path / name
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc=size={size}:rate=24:duration=0.5",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return path
+
+    small = make_clip("small.mp4", "64x36")
+    large = make_clip("large.mp4", "128x72")
+    value = ComfyUIEnhance._compute_ssim(small, large)
+    assert isinstance(value, float)
 
 
 def test_unavailable_server_fails_without_fallback(tmp_path):
