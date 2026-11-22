@@ -1,9 +1,9 @@
 # MiniMax H3 RefMod Defaults
 
-**Status:** Proposed for approval
+**Status:** Approved by user on 2026-11-22
 
 **Scope:** Local ComfyUI MiniMax H3 asset generation in the cinematic pipeline
-**Decision requested:** Make project-scoped RefMod extraction and application the default for reusable approved assets.
+**Decision:** Make project-scoped RefMod extraction and application the default for reusable approved assets.
 
 ## Intent
 
@@ -114,4 +114,4 @@ The implementation plan may choose the exact tool boundary (a dedicated RefMod e
 
 The builder asked whether a state variant used by only one planned shot should still receive a Mod. This design treats an approved catalog asset/state as reusable by identity, not by current shot count: any approved asset of an eligible kind referenced by at least one planned H3 shot gets a project Mod. This avoids adding a second reuse-count rule that would prevent a current single-shot variant from being reused when the plan expands.
 
-No product code changes are authorized by this document. Implementation begins only after the user approves this design.
+This design was approved by the user on 2026-11-22. Implementation proceeds under the separate implementation plan after the user reviews that plan.
