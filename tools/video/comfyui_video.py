@@ -28,6 +28,7 @@ from tools.base_tool import (
     ToolTier,
 )
 from tools._comfyui.client import ComfyUIClient, ComfyUIError
+from tools._comfyui.refmod_workflow import build_refmod_workflow
 from tools._comfyui.metadata import (
     BUNDLED_MODEL_STACKS,
     COMFYUI_SETUP_OFFER,
@@ -53,6 +54,7 @@ _HYPERFLOW_WORKFLOWS = {
     "reference_to_video": "hyperflow_int8_ref2v_api.json",
 }
 _HYPERFLOW_OUTPUT_NODE = "14"
+_HYPERFLOW_REFMOD_REF2V_WORKFLOW = "hyperflow_int8_ref2v_refmod_api.json"
 
 # Operations only the bundled HyperFlow H3 family can execute.  Every other
 # family either has no workflow for them (WAN) or is text-to-video only
@@ -244,8 +246,41 @@ class ComfyUIVideo(BaseTool):
                 "items": {"type": "string"},
                 "maxItems": 2,
                 "description": (
-                    "Two local reference images for reference_to_video "
-                    "(HyperFlow H3 local): first binds ref_image_0, second ref_image_1."
+                    "Up to two local reference images for reference_to_video "
+                    "(HyperFlow H3 local): first binds ref_image_0, second ref_image_1. "
+                    "Two are required when no project RefMods are supplied."
+                ),
+            },
+            "refmod_assets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "asset_id",
+                        "loader_name",
+                        "concept_type",
+                        "state",
+                        "description",
+                        "prompt_label",
+                    ],
+                    "properties": {
+                        key: {"type": "string"}
+                        for key in (
+                            "asset_id",
+                            "loader_name",
+                            "concept_type",
+                            "state",
+                            "description",
+                            "prompt_label",
+                            "source_sha256",
+                            "refmod_sha256",
+                        )
+                    },
+                },
+                "description": (
+                    "Ordered project-approved RefMods for local MiniMax H3 Ref2VA. "
+                    "Each entry includes asset_id, loader_name, concept_type, state, "
+                    "description, and prompt_label."
                 ),
             },
             "checkpoint_name": {
@@ -306,6 +341,10 @@ class ComfyUIVideo(BaseTool):
             "generate_audio": {"type": "boolean", "default": True},
             "seed": {"type": "integer", "description": "Random if omitted"},
             "output_path": {"type": "string", "description": "Where to save the video"},
+            "server_url": {
+                "type": "string",
+                "description": "Optional ComfyUI server URL for this execution only.",
+            },
             "workflow_json": {
                 "type": "string",
                 "description": "Optional full ComfyUI workflow JSON. Requires output_node.",
@@ -370,10 +409,18 @@ class ComfyUIVideo(BaseTool):
     idempotency_key_fields = [
         "prompt",
         "operation",
+        "model_family",
+        "checkpoint_name",
         "width",
         "height",
         "num_frames",
         "seed",
+        "reference_image_path",
+        "reference_image_paths",
+        "first_frame_image_path",
+        "last_frame_image_path",
+        "refmod_assets",
+        "server_url",
     ]
     side_effects = ["writes video file to output_path"]
     user_visible_verification = [
@@ -511,6 +558,50 @@ class ComfyUIVideo(BaseTool):
         )
         model_family = str(inputs.get("model_family", "wan2.2"))
         requested_operation = inputs.get("operation", "text_to_video")
+        requested_server_url = inputs.get("server_url")
+        if resume_id:
+            resumed_server_url = resume_context.get("server_url")
+            if (
+                requested_server_url
+                and resumed_server_url
+                and str(requested_server_url).rstrip("/")
+                != str(resumed_server_url).rstrip("/")
+            ):
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "server_url does not match the ComfyUI server that owns "
+                        "this prompt_id"
+                    ),
+                )
+            requested_server_url = requested_server_url or resumed_server_url
+        refmod_assets = inputs.get("refmod_assets") or []
+        if refmod_assets and not resume_id:
+            if requested_operation == "first_last_frame_to_video":
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Project RefMods require H3 Ref2VA and cannot be combined "
+                        "with FL2VA first/last-frame conditioning."
+                    ),
+                )
+            if model_family not in {
+                "minimax_h3_local",
+                "minimax_h3_hyperflow_local",
+            }:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Supplied local RefMod bindings require a local MiniMax H3 "
+                        "Ref2VA route; hosted H3 and other model families cannot use "
+                        "local RefMod nodes."
+                    ),
+                )
+            if requested_operation != "reference_to_video":
+                return ToolResult(
+                    success=False,
+                    error="Local RefMods are supported only for H3 Ref2VA reference_to_video.",
+                )
         if (
             requested_operation in _HYPERFLOW_ONLY_OPERATIONS
             and model_family != "minimax_h3_hyperflow_local"
@@ -523,6 +614,11 @@ class ComfyUIVideo(BaseTool):
                     f"Got model_family={model_family!r}; use the HyperFlow "
                     "family or choose text_to_video/image_to_video."
                 ),
+            )
+        client = self._client
+        if requested_server_url:
+            client = ComfyUIClient(
+                server_url=str(requested_server_url), capability="video"
             )
         partner_nodes = {
             "gemini_omni_flash": "GeminiVideoOmni",
@@ -594,11 +690,28 @@ class ComfyUIVideo(BaseTool):
                 ),
             )
 
-        if not self._client.is_available():
+        if not client.is_available():
             return ToolResult(
                 success=False,
-                error=self._client.unavailable_reason(),
+                error=client.unavailable_reason(),
             )
+        if refmod_assets and not resume_id:
+            required_refmod_nodes = (
+                "MiniMaxH3RefModsLoader",
+                "MiniMaxH3RefModApply",
+            )
+            missing_refmod_nodes = [
+                node for node in required_refmod_nodes if not client.has_node(node)
+            ]
+            if missing_refmod_nodes:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Local H3 RefMod execution is blocked; the selected ComfyUI "
+                        "server is missing nodes: "
+                        + ", ".join(missing_refmod_nodes)
+                    ),
+                )
 
         operation = inputs.get("operation", "text_to_video")
 
@@ -608,7 +721,7 @@ class ComfyUIVideo(BaseTool):
                 if operation == "image_to_video"
                 else _REQUIRED_MODELS_T2V
             )
-            _, missing = self._client.check_models(required)
+            _, missing = client.check_models(required)
             if missing:
                 workflow_key = (
                     "wan22-i2v-4step"
@@ -649,11 +762,19 @@ class ComfyUIVideo(BaseTool):
                     for node in workflow.values() if isinstance(node, dict)
                 ):
                     raise ComfyUIError("Local MiniMax H3 workflow contains a hosted ComfyUI Partner Node")
-                workflow = self._client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
+                workflow = client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
+                if refmod_assets:
+                    workflow, ordered_asset_ids = build_refmod_workflow(
+                        workflow, refmod_assets, operation
+                    )
+                    hyperflow_meta["refmod_assets"] = self._refmod_provenance(
+                        refmod_assets, ordered_asset_ids
+                    )
+                    hyperflow_meta["refmod_workflow"] = "MiniMaxH3RefModApply"
                 output_node = str(inputs["output_node"])
             elif model_family in partner_nodes:
                 node_class = partner_nodes[model_family]
-                if not self._client.has_node(node_class):
+                if not client.has_node(node_class):
                     raise ComfyUIError(
                         f"ComfyUI server does not expose {node_class}; update ComfyUI "
                         "and enable Partner Nodes. These are hosted API nodes, not offline models."
@@ -663,10 +784,12 @@ class ComfyUIVideo(BaseTool):
                 )
             elif model_family == "minimax_h3_hyperflow_local":
                 workflow, output_node, hyperflow_meta = self._build_hyperflow(
-                    inputs, seed, output_path
+                    inputs, seed, output_path, client=client
                 )
             elif operation == "image_to_video":
-                workflow, output_node = self._build_i2v(inputs, seed, output_path)
+                workflow, output_node = self._build_i2v(
+                    inputs, seed, output_path, client=client
+                )
             else:
                 workflow, output_node = self._build_t2v(inputs, seed, output_path)
 
@@ -675,7 +798,7 @@ class ComfyUIVideo(BaseTool):
                               inputs, custom_workflow, output_node, operation, workflow, model_family))
             if hyperflow_meta:
                 provenance.update(hyperflow_meta)
-            paths = self._client.generate(
+            paths = client.generate(
                 workflow,
                 output_node=output_node,
                 dest=output_path,
@@ -693,6 +816,7 @@ class ComfyUIVideo(BaseTool):
                     "seed": seed, "model": self._model_name(inputs, custom_workflow),
                     "prompt": inputs.get("prompt"), "output_node": output_node,
                     "hosted": model_family in partner_nodes and not custom_workflow,
+                    "server_url": client.server_url,
                 })
             if exc.prompt_id:
                 error_msg = (
@@ -700,7 +824,7 @@ class ComfyUIVideo(BaseTool):
                     f"running server-side. To recover it without resubmitting, call "
                     f"execute() again with resume_prompt_id={exc.prompt_id!r} "
                     f"(and a longer timeout_seconds if it needs more time), or poll "
-                    f"GET {{COMFYUI_SERVER_URL}}/history/{exc.prompt_id} directly."
+                    f"GET {client.server_url}/history/{exc.prompt_id} directly."
                 )
             else:
                 error_msg = str(exc)
@@ -752,7 +876,7 @@ class ComfyUIVideo(BaseTool):
                 }
             )
         wall = round(time.time() - start, 3)
-        comfy_timing = dict(getattr(self._client, "last_timing", None) or {})
+        comfy_timing = dict(getattr(client, "last_timing", None) or {})
         exec_s = comfy_timing.get("comfy_prompt_exec_s")
         overhead = wall
         if isinstance(exec_s, (int, float)):
@@ -811,8 +935,14 @@ class ComfyUIVideo(BaseTool):
         return workflow, _T2V_OUTPUT_NODE
 
     def _build_i2v(
-        self, inputs: dict[str, Any], seed: int, output_path: Path
+        self,
+        inputs: dict[str, Any],
+        seed: int,
+        output_path: Path,
+        *,
+        client: ComfyUIClient | None = None,
     ) -> tuple[dict, str]:
+        client = client or self._client
         width = inputs.get("width", 640)
         height = inputs.get("height", 640)
         num_frames = inputs.get("num_frames", 81)
@@ -836,7 +966,7 @@ class ComfyUIVideo(BaseTool):
 
         # Upload to ComfyUI
         upload_name = f"om_{output_path.stem}.png"
-        server_name = self._client.upload_image(Path(ref_path), upload_name)
+        server_name = client.upload_image(Path(ref_path), upload_name)
 
         workflow = ComfyUIClient.load_workflow(_WORKFLOWS / "wan22-i2v-4step.json")
         workflow = ComfyUIClient.patch_workflow(
@@ -884,13 +1014,19 @@ class ComfyUIVideo(BaseTool):
         return normalized
 
     def _build_hyperflow(
-        self, inputs: dict[str, Any], seed: int, output_path: Path
+        self,
+        inputs: dict[str, Any],
+        seed: int,
+        output_path: Path,
+        *,
+        client: ComfyUIClient | None = None,
     ) -> tuple[dict, str, dict]:
         """Build a bundled HyperFlow H3 workflow and bind its inputs.
 
         Returns ``(workflow, output_node, metadata)`` where ``metadata`` holds
         the selected loader/checkpoint for provenance.
         """
+        client = client or self._client
         operation = str(inputs.get("operation", "text_to_video"))
         workflow_file = _HYPERFLOW_WORKFLOWS.get(operation)
         if workflow_file is None:
@@ -901,6 +1037,9 @@ class ComfyUIVideo(BaseTool):
         if not checkpoint_name:
             raise ValueError("minimax_h3_hyperflow_local requires checkpoint_name")
         loader = str(inputs.get("loader", "auto"))
+        refmod_assets = inputs.get("refmod_assets") or []
+        if operation == "reference_to_video" and refmod_assets:
+            workflow_file = _HYPERFLOW_REFMOD_REF2V_WORKFLOW
 
         workflow = ComfyUIClient.load_workflow(_WORKFLOWS / workflow_file)
         workflow = self._normalize_hyperflow_loader(workflow, checkpoint_name, loader)
@@ -924,6 +1063,7 @@ class ComfyUIVideo(BaseTool):
             "filename_prefix": output_path.stem,
         }
 
+        refmod_provenance: list[dict[str, Any]] = []
         if operation == "image_to_video":
             reference = inputs.get("reference_image_path") or inputs.get("first_frame_image_path")
             if not reference:
@@ -945,24 +1085,72 @@ class ComfyUIVideo(BaseTool):
             values["reference_images"] = {"first_frame": first, "last_frame": last}
         elif operation == "reference_to_video":
             references = inputs.get("reference_image_paths") or []
-            if len(references) < 2:
+            if len(references) > 2:
+                raise ValueError("reference_to_video accepts at most two native reference images")
+            if not refmod_assets and len(references) < 2:
                 raise ValueError(
                     "reference_to_video requires two reference_image_paths"
                 )
-            bindings["reference_images.ref_image_0"] = [{"node": "20", "input": "image"}]
-            bindings["reference_images.ref_image_1"] = [{"node": "21", "input": "image"}]
-            values["reference_images"] = {
-                "ref_image_0": references[0],
-                "ref_image_1": references[1],
-            }
+            refmod_bindings: dict[str, Any] = {}
+            for index, (input_name, node_id) in enumerate(
+                (("ref_image_0", "20"), ("ref_image_1", "21"))
+            ):
+                if index < len(references):
+                    refmod_bindings[input_name] = references[index]
+                    bindings[f"reference_images.{input_name}"] = [
+                        {"node": node_id, "input": "image"}
+                    ]
+                else:
+                    workflow["5"]["inputs"].pop(
+                        f"ref_images.{input_name}", None
+                    )
+                    workflow.pop(node_id, None)
+            if refmod_bindings:
+                values["reference_images"] = refmod_bindings
+            if refmod_assets:
+                workflow, ordered_asset_ids = build_refmod_workflow(
+                    workflow, refmod_assets, operation
+                )
+                refmod_provenance = self._refmod_provenance(
+                    refmod_assets, ordered_asset_ids
+                )
+            else:
+                refmod_provenance = []
+        else:
+            refmod_provenance = []
 
-        workflow = self._client.bind_workflow(workflow, bindings, values)
+        workflow = client.bind_workflow(workflow, bindings, values)
         metadata = {
             "workflow": workflow_file,
             "checkpoint_name": checkpoint_name,
             "loader": workflow["1"]["class_type"],
         }
+        if refmod_provenance:
+            metadata["refmod_assets"] = refmod_provenance
+            metadata["refmod_workflow"] = "MiniMaxH3RefModApply"
         return workflow, _HYPERFLOW_OUTPUT_NODE, metadata
+
+    @staticmethod
+    def _refmod_provenance(
+        refs: list[dict[str, Any]], ordered_asset_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        by_id = {str(ref.get("asset_id")): ref for ref in refs if isinstance(ref, dict)}
+        return [
+            {
+                key: by_id[asset_id][key]
+                for key in (
+                    "asset_id",
+                    "loader_name",
+                    "concept_type",
+                    "state",
+                    "prompt_label",
+                    "source_sha256",
+                    "refmod_sha256",
+                )
+                if key in by_id[asset_id]
+            }
+            for asset_id in ordered_asset_ids
+        ]
 
     @staticmethod
     def _probe_media(path: Path) -> dict[str, Any]:

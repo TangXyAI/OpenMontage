@@ -140,6 +140,7 @@ EXPECTED_WORKFLOWS = [
     "wan22-i2v-4step.json",
     "wan22-t2v-4step.json",
     "ace-step-1-t2a.json",
+    "hyperflow_int8_ref2v_refmod_api.json",
 ]
 
 
@@ -978,6 +979,7 @@ class TestCustomWorkflowContract:
 
         assert result.success is False
         assert result.data["prompt_id"] == "timed-out-id"
+        assert result.data["resume_context"]["server_url"] == tool._client.server_url
         assert "resume_prompt_id" in result.error
         assert "timed-out-id" in result.error
 
@@ -1686,6 +1688,8 @@ def test_hyperflow_family_is_declared():
     tool = ComfyUIVideo()
     assert "minimax_h3_hyperflow_local" in tool.input_schema["properties"]["model_family"]["enum"]
     assert "hyperflow-h3" in tool.agent_skills
+    assert "refmod_assets" in tool.idempotency_key_fields
+    assert "server_url" in tool.idempotency_key_fields
 
 
 def test_hyperflow_family_requires_a_workflow():
@@ -1698,3 +1702,203 @@ def test_hyperflow_family_requires_a_workflow():
     assert result.data["setup_required"] is True
     names = {item["name"] for item in result.data["model_stack"]}
     assert "minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf" in names
+
+
+def _test_refmod(asset_id="hero-wet", index=1):
+    return {
+        "asset_id": asset_id,
+        "loader_name": f"openmontage/project-a/{asset_id}",
+        "concept_type": "identity",
+        "state": "wet",
+        "description": f"approved reference for {asset_id}",
+        "prompt_label": f"<Subject {index}>",
+    }
+
+
+def test_hyperflow_refmod_only_reference_to_video_needs_no_native_stills(tmp_path):
+    tool = ComfyUIVideo()
+    tool._client.bind_workflow = lambda workflow, bindings, values: workflow
+
+    workflow, _, metadata = tool._build_hyperflow(
+        {
+            "prompt": "<Subject 1> walks through rain.",
+            "operation": "reference_to_video",
+            "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+            "loader": "gguf",
+            "reference_image_paths": [],
+            "refmod_assets": [_test_refmod()],
+        },
+        seed=12,
+        output_path=tmp_path / "clip.mp4",
+    )
+
+    assert workflow["refmod_loader_1"]["inputs"]["mod_1"] == (
+        "openmontage/project-a/hero-wet"
+    )
+    assert "ref_images.ref_image_0" not in workflow["5"]["inputs"]
+    assert "ref_images.ref_image_1" not in workflow["5"]["inputs"]
+    assert metadata["refmod_assets"][0]["prompt_label"] == "<Subject 1>"
+
+
+def test_hyperflow_refmod_provenance_preserves_prompt_reference_order(tmp_path):
+    tool = ComfyUIVideo()
+    tool._client.bind_workflow = lambda workflow, bindings, values: workflow
+    refs = [_test_refmod("hero-wet", 1), _test_refmod("loc-master", 2)]
+
+    _, _, metadata = tool._build_hyperflow(
+        {
+            "prompt": "<Subject 1> crosses <Subject 2>.",
+            "operation": "reference_to_video",
+            "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+            "loader": "gguf",
+            "reference_image_paths": [],
+            "refmod_assets": refs,
+        },
+        seed=12,
+        output_path=tmp_path / "clip.mp4",
+    )
+
+    assert [item["asset_id"] for item in metadata["refmod_assets"]] == [
+        "hero-wet",
+        "loc-master",
+    ]
+    assert [item["prompt_label"] for item in metadata["refmod_assets"]] == [
+        "<Subject 1>",
+        "<Subject 2>",
+    ]
+
+
+def test_hosted_h3_route_rejects_local_refmods():
+    result = ComfyUIVideo().execute({
+        "prompt": "a rain-soaked alley",
+        "model_family": "minimax_h3_api",
+        "refmod_assets": [_test_refmod()],
+    })
+
+    assert not result.success
+    assert "local RefMod" in result.error
+
+
+def test_local_h3_refmod_preflight_checks_nodes_on_selected_server(
+    tmp_path, monkeypatch
+):
+    import tools.video.comfyui_video as video_module
+
+    tool = ComfyUIVideo()
+    seen = {"nodes": []}
+
+    class MissingRefModNodesClient:
+        def __init__(self, server_url=None, capability=None):
+            self.server_url = server_url
+            self.capability = capability
+            self.last_timing = {}
+
+        def is_available(self):
+            return True
+
+        def has_node(self, node):
+            seen["nodes"].append(node)
+            return False
+
+    monkeypatch.setattr(video_module, "ComfyUIClient", MissingRefModNodesClient)
+
+    result = tool.execute({
+        "prompt": "<Subject 1> walks through rain.",
+        "model_family": "minimax_h3_hyperflow_local",
+        "operation": "reference_to_video",
+        "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+        "loader": "gguf",
+        "refmod_assets": [_test_refmod()],
+        "server_url": "http://127.0.0.1:8290",
+        "output_path": str(tmp_path / "video.mp4"),
+        "seed": 123,
+    })
+
+    assert not result.success
+    assert "MiniMaxH3RefModsLoader" in result.error
+    assert seen["nodes"] == ["MiniMaxH3RefModsLoader", "MiniMaxH3RefModApply"]
+
+
+def test_comfyui_video_uses_explicit_server_url(tmp_path, monkeypatch):
+    import tools.video.comfyui_video as video_module
+
+    tool = ComfyUIVideo()
+    original_client = tool._client
+    original_client.is_available = lambda: True
+    seen = {}
+
+    class RecordingClient:
+        def __init__(self, server_url=None, capability=None):
+            self.server_url = server_url or "http://unexpected-default:8188"
+            self.capability = capability
+            self.last_timing = {}
+
+        def is_available(self):
+            return True
+
+        def bind_workflow(self, workflow, bindings, values):
+            return workflow
+
+        def generate(self, workflow, output_node, dest, **kwargs):
+            seen["server_url"] = self.server_url
+            seen["capability"] = self.capability
+            return [Path(dest)]
+
+    monkeypatch.setattr(video_module, "ComfyUIClient", RecordingClient)
+
+    result = tool.execute({
+        "prompt": "test",
+        "workflow_json": json.dumps({"42": {"inputs": {}}}),
+        "output_node": "42",
+        "output_path": str(tmp_path / "video.mp4"),
+        "seed": 123,
+        "server_url": "http://127.0.0.1:8290",
+    })
+
+    assert result.success is True
+    assert seen == {
+        "server_url": "http://127.0.0.1:8290",
+        "capability": "video",
+    }
+    assert tool._client is original_client
+
+
+def test_video_resume_rejects_a_different_comfy_server():
+    result = ComfyUIVideo().execute({
+        "prompt": "test",
+        "resume_prompt_id": "prompt-on-8290",
+        "resume_context": {
+            "prompt_id": "prompt-on-8290",
+            "output_node": "14",
+            "server_url": "http://127.0.0.1:8290",
+        },
+        "server_url": "http://127.0.0.1:8188",
+    })
+
+    assert not result.success
+    assert "does not match" in result.error
+
+
+def test_custom_h3_graph_without_ref2va_conditioning_is_blocked(tmp_path):
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    tool._client.has_node = lambda node: True
+    tool._client.generate = lambda *args, **kwargs: pytest.fail(
+        "incompatible custom H3 graph must be rejected before submission"
+    )
+
+    result = tool.execute({
+        "prompt": "<Subject 1> walks through rain.",
+        "model_family": "minimax_h3_hyperflow_local",
+        "operation": "reference_to_video",
+        "workflow_json": json.dumps({
+            "9": {"class_type": "BasicGuider", "inputs": {"conditioning": ["5", 0]}},
+            "5": {"class_type": "OtherConditioning", "inputs": {}},
+        }),
+        "output_node": "9",
+        "refmod_assets": [_test_refmod()],
+        "output_path": str(tmp_path / "video.mp4"),
+    })
+
+    assert not result.success
+    assert "Ref2VA conditioning" in result.error
