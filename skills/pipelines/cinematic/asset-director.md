@@ -71,19 +71,21 @@ For `narrative_generated` productions, work through this chain in order. Each st
 
    This is the `model_selection` sub-stage; no approved route means no generation.
 6. **Shot specs.** Write one model-neutral shot spec per shot and validate it against `schemas/artifacts/shot_spec.schema.json`: `shot_id`, `scene_id`, `duration_seconds`, `scene_context`, `references` (asset id, kind, path, role), `location_map`, `first_frame`, `format_mode`, `optics`, `camera`, `action_timing`, `physics`, `lighting`, `audio`, `character_acting`, `style`, `quality`, and `constraints`. Provider-specific parameters belong in the asset manifest, never in the shot spec.
-   For a strict continuity proposal, include the shot's versioned `continuity` object and register the distinct scene/shot IDs with `NarrativeAssets`.
+   For shots whose `scene_id` is listed in `scene_plan.metadata.continuity_scene_ids`, include the versioned `continuity` object and register the distinct scene/shot IDs with `NarrativeAssets`. Preserve previously approved shots in unlisted legacy scenes without a continuity version.
 
 ### Strict continuity check
 
-After the `asset_sheets` approval and once the shot specs are complete, register
-each shot with `catalog.register_shot(shot_id, scene_id,
-continuity_contract_version="1.0")`. Then call `validate_shot_continuity`
-before prompt compilation and before `Batch takes`. Before this check, persist
-each approved sheet with `put_asset` using its stable `entity_id` and state, and
-link the sheet references to every shot that uses them. This check verifies the
-approved master plate, state variants, and references are linked and entity
-state changes are declared. A missing or inconsistent reference is a
-pre-generation blocker, not a reason to try a different provider.
+After the `asset_sheets` approval and once the shot specs are complete, use
+`scene_plan.metadata.continuity_scene_ids` to choose strict shots. Register a
+shot in a listed scene with `catalog.register_shot(shot_id, scene_id,
+continuity_contract_version="1.0")`; register a grandfathered legacy shot
+without a version. Before validation, persist each approved sheet with
+`put_asset` using its stable `entity_id` and state, and link the sheet references
+to every shot that uses them. Then call `validate_shot_continuity` before prompt
+compilation and before `Batch takes`. It checks strict scenes' approved master
+plates, state variants, and references; unlisted legacy scenes remain unchanged.
+A missing or inconsistent reference is a pre-generation blocker, not a reason to
+try a different provider.
 
 After an enhancement changes the selected media, sample the enhanced file and
 record a fresh review before re-exporting the manifest. The prior review does

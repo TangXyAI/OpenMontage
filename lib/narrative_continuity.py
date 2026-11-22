@@ -58,21 +58,47 @@ def validate_scene_plan_continuity(scene_plan: Mapping[str, Any], *, strict: boo
         raise ContinuityValidationError(["scene_plan.metadata must be an object"])
     location_maps = metadata.get("location_map")
     scene_contracts = metadata.get("scene_continuity")
+    strict_scene_ids = metadata.get("continuity_scene_ids")
     if not isinstance(location_maps, Mapping):
         raise ContinuityValidationError(["scene_plan.metadata.location_map is required in strict mode"])
     if not isinstance(scene_contracts, Mapping):
         raise ContinuityValidationError(["scene_plan.metadata.scene_continuity is required in strict mode"])
+    if not isinstance(strict_scene_ids, list) or not strict_scene_ids:
+        raise ContinuityValidationError(["scene_plan.metadata.continuity_scene_ids must name strict scenes"])
 
-    expected_ids = set(scene_ids)
-    for field, values in (("location_map", location_maps), ("scene_continuity", scene_contracts)):
-        missing = sorted(expected_ids - set(values))
-        extra = sorted(set(values) - expected_ids)
-        if missing:
-            issues.append(f"scene_plan.metadata.{field} is missing scene ids: {', '.join(missing)}")
-        if extra:
-            issues.append(f"scene_plan.metadata.{field} has unknown scene ids: {', '.join(str(item) for item in extra)}")
+    invalid_scene_ids = [item for item in strict_scene_ids if not isinstance(item, str) or not item.strip()]
+    if invalid_scene_ids:
+        raise ContinuityValidationError(["continuity_scene_ids contains an empty or invalid scene id"])
+    if len(strict_scene_ids) != len(set(strict_scene_ids)):
+        raise ContinuityValidationError(["continuity_scene_ids contains duplicate scene ids"])
 
-    for scene_id in scene_ids:
+    strict_ids = set(strict_scene_ids)
+    known_ids = set(scene_ids)
+    unknown_strict_ids = sorted(strict_ids - known_ids)
+    if unknown_strict_ids:
+        issues.append(f"continuity_scene_ids has unknown scene ids: {', '.join(unknown_strict_ids)}")
+    invalid_location_keys = [key for key in location_maps if not isinstance(key, str)]
+    invalid_contract_keys = [key for key in scene_contracts if not isinstance(key, str)]
+    if invalid_location_keys:
+        issues.append("scene_plan.metadata.location_map keys must be scene id strings")
+    if invalid_contract_keys:
+        issues.append("scene_plan.metadata.scene_continuity keys must be scene id strings")
+    location_keys = {key for key in location_maps if isinstance(key, str)}
+    contract_keys = {key for key in scene_contracts if isinstance(key, str)}
+    missing_summaries = sorted(strict_ids - location_keys)
+    extra_summaries = sorted(location_keys - known_ids)
+    if missing_summaries:
+        issues.append(f"scene_plan.metadata.location_map is missing strict scene ids: {', '.join(missing_summaries)}")
+    if extra_summaries:
+        issues.append(f"scene_plan.metadata.location_map has unknown scene ids: {', '.join(extra_summaries)}")
+    missing_contracts = sorted(strict_ids - contract_keys)
+    extra_contracts = sorted(contract_keys - strict_ids)
+    if missing_contracts:
+        issues.append(f"scene_plan.metadata.scene_continuity is missing scene ids: {', '.join(missing_contracts)}")
+    if extra_contracts:
+        issues.append(f"scene_plan.metadata.scene_continuity has unmarked scene ids: {', '.join(extra_contracts)}")
+
+    for scene_id in strict_scene_ids:
         summary = location_maps.get(scene_id)
         if not isinstance(summary, str) or not summary.strip():
             issues.append(f"scene {scene_id} needs a non-empty location_map summary")
@@ -148,6 +174,7 @@ def validate_shot_continuity(
     scene_contracts = scene_plan["metadata"]["scene_continuity"]
     location_maps = scene_plan["metadata"]["location_map"]
     scene_ids = {scene["id"] for scene in scene_plan["scenes"]}
+    strict_scene_ids = set(scene_plan["metadata"]["continuity_scene_ids"])
     if not isinstance(shot_specs, Mapping) or not isinstance(shot_specs.get("shots"), list) or not shot_specs["shots"]:
         raise ContinuityValidationError(["shot_specs.shots must be a non-empty array"])
     if not isinstance(catalog_data, Mapping) or not isinstance(catalog_data.get("assets"), Mapping) or not isinstance(catalog_data.get("shots"), Mapping):
@@ -180,8 +207,16 @@ def validate_shot_continuity(
         if scene_id not in scene_ids:
             issues.append(f"shot {shot_id} has unknown scene_id {scene_id!r}")
             continue
-        scene_contract = scene_contracts[scene_id]
+        catalog_shot = catalog_shots.get(shot_id)
         continuity = shot.get("continuity")
+        if scene_id not in strict_scene_ids:
+            marked_in_spec = isinstance(continuity, Mapping) and continuity.get("contract_version") == "1.0"
+            marked_in_catalog = isinstance(catalog_shot, Mapping) and catalog_shot.get("continuity_contract_version") == "1.0"
+            if marked_in_spec or marked_in_catalog:
+                issues.append(f"shot {shot_id} is strict but scene {scene_id} is not in continuity_scene_ids")
+            last_states.clear()
+            continue
+        scene_contract = scene_contracts[scene_id]
         if not isinstance(continuity, Mapping) or continuity.get("contract_version") != "1.0":
             issues.append(f"shot {shot_id} is missing continuity contract version 1.0")
             continue
@@ -196,7 +231,6 @@ def validate_shot_continuity(
         if shot.get("location_map") != location_maps.get(scene_id):
             issues.append(f"shot {shot_id} location_map does not match scene {scene_id}")
 
-        catalog_shot = catalog_shots.get(shot_id)
         if not isinstance(catalog_shot, Mapping):
             issues.append(f"shot {shot_id} is not registered in NarrativeAssets")
             linked_asset_ids: set[str] = set()

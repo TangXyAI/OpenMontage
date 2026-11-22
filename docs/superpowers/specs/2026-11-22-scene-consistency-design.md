@@ -65,7 +65,7 @@ The selected approach follows the user's choice on 2026-11-22. The 3D route rema
 
 ### 1. Scene-level continuity contract
 
-Extend `scene_plan.metadata` with a typed, per-scene continuity record while retaining the current human-readable `location_map` during migration. The record should identify:
+Extend `scene_plan.metadata` with an explicit `continuity_scene_ids` list and typed per-scene continuity records while retaining the current human-readable `location_map` during migration. New strict projects list every planned scene; an opted-in existing project lists only newly planned or explicitly replanned scenes, so already approved legacy scenes stay legacy. Each strict scene record should identify:
 
 - `scene_id` and stable `location_id`;
 - approved empty-plate reference;
@@ -90,7 +90,7 @@ Extend each `shot_spec` with a structured continuity section containing:
 
 Keep the existing `scene_id`, `shot_id`, `references`, and prose fields. The new fields should make facts addressable without removing the descriptive language the prompt compiler needs.
 
-Track entity state across its last appearance, including nonadjacent shots and scene boundaries. Location geometry and lighting are scene-scoped and reset to the next scene's contract; character, wardrobe, and prop states carry forward unless the continuity record declares a reset, time jump, or other change. A first appearance starts from its approved canonical state.
+Track entity state across its last strict appearance, including nonadjacent shots and scene boundaries. An unmarked legacy scene resets the validator's state ledger; the next strict appearance starts from its approved reference because the legacy segment has no v1 state record. Location geometry and lighting are scene-scoped and reset to the next scene's contract; character, wardrobe, and prop states carry forward unless the continuity record declares a reset, time jump, or other change.
 
 ### 3. Narrative asset catalog and IDs
 

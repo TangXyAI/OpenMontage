@@ -61,6 +61,7 @@ def _scene_plan() -> dict:
     scene_plan = sample_artifact("scene_plan")
     scene_id = scene_plan["scenes"][0]["id"]
     scene_plan["metadata"] = {
+        "continuity_scene_ids": [scene_id],
         "location_map": {
             scene_id: "Door rear-center; workbench camera-left; window key from camera-left, shadows fall right."
         },
@@ -109,6 +110,17 @@ def test_scene_continuity_requires_typed_anchors_and_lighting():
 
 def test_legacy_scene_plan_without_continuity_remains_valid():
     jsonschema.validate(sample_artifact("scene_plan"), SCENE_PLAN_SCHEMA)
+
+
+def test_continuity_scene_ids_must_be_unique_strings():
+    scene_plan = _scene_plan()
+    jsonschema.validate(scene_plan, SCENE_PLAN_SCHEMA)
+
+    malformed = copy.deepcopy(scene_plan)
+    scene_id = malformed["scenes"][0]["id"]
+    malformed["metadata"]["continuity_scene_ids"] = [scene_id, scene_id]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(malformed, SCENE_PLAN_SCHEMA)
 
 
 def test_shot_continuity_requires_entity_and_change_fields():

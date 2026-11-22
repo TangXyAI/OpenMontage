@@ -72,6 +72,7 @@ For `narrative_generated`, this list is the input to the asset-sheet gate; an as
 ```json
 {
   "metadata": {
+    "continuity_scene_ids": ["s02"],
     "location_map": {
       "s02": "loc-office — Locked master angle from the door; table center-frame; window camera-left; key through the window, shadow falls camera-right."
     },
@@ -103,13 +104,18 @@ Each value is one string describing the locked master angle, named anchor object
 ### Strict narrative planning check
 
 When the approved proposal has `metadata.continuity_contract_version: "1.0"`,
-add `scene_plan.metadata.scene_continuity`, keyed by each scene ID. Each entry
-must define `location_id`, `master_angle`, `camera_axis`, named `anchors`,
+add `scene_plan.metadata.continuity_scene_ids` to name the scenes covered by v1,
+and `scene_plan.metadata.scene_continuity`, keyed by those scene IDs. New strict
+projects list every planned scene. When an existing project opts in, list only
+newly planned or explicitly replanned scenes; leave already approved legacy
+scenes unmarked. Each strict entry must define `location_id`, `master_angle`,
+`camera_axis`, named `anchors`,
 `lighting` (`key_source`, `direction`, `shadow_direction`), optional
 `constants` (`time_of_day`, `weather`, `palette`), and `allowed_changes`.
-Start each matching `location_map` summary with the same `location_id`, then
-describe the master view, anchors, and light in plain language. The typed
-contract is the source of truth; the summary is for people reading the plan.
+Keep the strict `scene_continuity` keys equal to `continuity_scene_ids`; each
+matching `location_map` summary starts with its `location_id`, then describes
+the master view, anchors, and light in plain language. The typed contract is the
+source of truth; the summary is for people reading the plan.
 
 Call `validate_scene_plan_continuity` before you generate the location plate
 or character/prop reference sheets. This structural check validates planned

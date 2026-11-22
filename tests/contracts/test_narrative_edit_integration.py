@@ -94,6 +94,38 @@ def test_direct_compose_rejects_stale_narrative_selection(tmp_path, monkeypatch)
     assert not result.success and "selection" in result.error.lower()
 
 
+def test_strict_narrative_selection_without_current_review_blocks_compose(tmp_path, monkeypatch):
+    from tests.contracts.test_phase0_contracts import sample_artifact
+
+    root = tmp_path / "project"
+    catalog = setup_catalog(root)
+    catalog.register_shot("shot-1", "scene-1", continuity_contract_version="1.0")
+    manifest = catalog.asset_manifest()
+    edit = catalog.edit_decisions(["shot-1"], "ffmpeg")
+
+    write_checkpoint(tmp_path, "project", "research", "completed", {"research_brief": sample_artifact("research_brief")}, pipeline_type="cinematic")
+    proposal = sample_artifact("proposal_packet")
+    proposal["production_plan"]["pipeline"] = "cinematic"
+    proposal.setdefault("metadata", {})["continuity_contract_version"] = "1.0"
+    write_checkpoint(tmp_path, "project", "proposal", "completed", {"proposal_packet": proposal}, pipeline_type="cinematic", human_approved=True)
+    script = sample_artifact("script")
+    write_checkpoint(tmp_path, "project", "script", "completed", {"script": script}, pipeline_type="cinematic", human_approved=True)
+    scene_plan = sample_artifact("scene_plan")
+    write_checkpoint(tmp_path, "project", "scene_plan", "completed", {"scene_plan": scene_plan}, pipeline_type="cinematic", human_approved=True)
+    write_checkpoint(tmp_path, "project", "assets", "completed", {"asset_manifest": manifest}, pipeline_type="cinematic", human_approval_required=True, human_approved=True)
+    write_checkpoint(tmp_path, "project", "edit", "completed", {"edit_decisions": edit}, pipeline_type="cinematic")
+
+    tool = VideoCompose()
+    monkeypatch.setattr(tool, "_compose", lambda inputs: ToolResult(success=True))
+    result = tool.execute({
+        "operation": "compose", "project_dir": str(root),
+        "edit_decisions": edit, "asset_manifest": manifest,
+        "output_path": str(root / "out.mp4"),
+    })
+    assert not result.success
+    assert "continuity review" in result.error.lower()
+
+
 def test_renamed_editorial_cut_cannot_use_unselected_take(tmp_path, monkeypatch):
     root = tmp_path / "project"
     catalog = setup_catalog(root)

@@ -179,8 +179,6 @@ class NarrativeAssets:
         override_reason = review.get("override_reason")
         if override_reason is not None and (not isinstance(override_reason, str) or not override_reason.strip()):
             raise ValueError("Continuity override reason cannot be empty")
-        if any(dimensions[name] in {"drift", "unclear"} for name in expected_dimensions) and override_reason is None:
-            raise ValueError("Continuity drift or unclear status requires an override reason")
 
         allowed_keys = {"dimensions", "notes", "evidence_paths", "override_reason"}
         unknown = set(review) - allowed_keys
@@ -237,6 +235,28 @@ class NarrativeAssets:
         shot = self.data["shots"].get(shot_id)
         if not shot or take_id not in shot["takes"]:
             raise ValueError(f"Unknown shot or take: {shot_id}/{take_id}")
+        if shot.get("continuity_contract_version") == "1.0":
+            take = shot["takes"][take_id]
+            review = take.get("metadata", {}).get("continuity_review")
+            if not isinstance(review, Mapping):
+                raise ValueError(f"Strict continuity selection requires a continuity review: {shot_id}/{take_id}")
+            if review.get("reviewed_path") != take.get("path"):
+                raise ValueError(f"Continuity review is stale for the current take path: {shot_id}/{take_id}")
+            dimensions = review.get("dimensions")
+            if not isinstance(dimensions, Mapping):
+                raise ValueError(f"Strict continuity selection has invalid review dimensions: {shot_id}/{take_id}")
+            unresolved = any(value in {"drift", "unclear"} for value in dimensions.values())
+            override_reason = review.get("override_reason")
+            if unresolved and (not isinstance(override_reason, str) or not override_reason.strip()):
+                raise ValueError(f"Continuity drift or unclear status needs an override before selection: {shot_id}/{take_id}")
+            try:
+                evidence_paths = review.get("evidence_paths", [])
+                if not isinstance(evidence_paths, list) or not evidence_paths:
+                    raise ValueError("missing evidence paths")
+                for evidence_path in evidence_paths:
+                    self._media(evidence_path)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Strict continuity selection has invalid review evidence: {shot_id}/{take_id}") from exc
         shot["selected"] = take_id
         self._save()
 
@@ -267,4 +287,16 @@ class NarrativeAssets:
             source = self.root / self._media(take["path"])
             cuts.append({"id": shot_id, "source": str(source), "in_seconds": 0, "out_seconds": take["duration_seconds"]})
         selection = {shot_id: self.data["shots"][shot_id]["selected"] for shot_id in shot_ids}
-        return {"version": "1.0", "render_runtime": render_runtime, "cuts": cuts, "metadata": {"narrative_selection": selection}}
+        continuity_shots = {}
+        for shot_id in shot_ids:
+            shot = self.data["shots"][shot_id]
+            scene = {"scene_id": shot.get("scene_id", shot_id)}
+            if shot.get("continuity_contract_version") is not None:
+                scene["continuity_contract_version"] = shot["continuity_contract_version"]
+            continuity_shots[shot_id] = scene
+        return {
+            "version": "1.0",
+            "render_runtime": render_runtime,
+            "cuts": cuts,
+            "metadata": {"narrative_selection": selection, "continuity_shots": continuity_shots},
+        }

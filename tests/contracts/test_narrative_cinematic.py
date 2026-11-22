@@ -48,6 +48,8 @@ def test_continuity_checks_bracket_scene_and_shot_generation():
     scene_text = (root / "skills/pipelines/cinematic/scene-director.md").read_text(encoding="utf-8")
     asset_text = (root / "skills/pipelines/cinematic/asset-director.md").read_text(encoding="utf-8")
     asset_pipeline = asset_text[asset_text.index("## Narrative Asset Pipeline"):]
+    assert "continuity_scene_ids" in scene_text
+    assert "continuity_scene_ids" in asset_pipeline
     assert "validate_scene_plan_continuity" in scene_text
     assert "generate the location plate" in scene_text
     assert scene_text.index("validate_scene_plan_continuity") < scene_text.index("generate the location plate")

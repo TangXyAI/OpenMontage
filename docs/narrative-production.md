@@ -12,7 +12,9 @@ All media paths must exist inside the project directory. Each distinct state
 of a character, location or prop should have its own asset ID; state variants
 share an `entity_id`. Keep `shot_id` distinct from `scene_id` and register the
 shot-to-scene relationship explicitly. Strict continuity applies when the
-approved proposal has `metadata.continuity_contract_version: "1.0"`.
+approved proposal has `metadata.continuity_contract_version: "1.0"`;
+`scene_plan.metadata.continuity_scene_ids` names the scenes under that contract.
+For an existing project opt-in, previously approved scenes stay unmarked.
 
 ```python
 from lib.narrative_assets import NarrativeAssets

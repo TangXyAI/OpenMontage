@@ -77,10 +77,12 @@ Strict continuity is enabled when the approved proposal records
 `metadata.continuity_contract_version: "1.0"`. A missing marker means legacy
 mode; do not retrofit already approved shots when an existing project opts in.
 
-- Keep `scene_plan.metadata.scene_continuity` and `scene_plan.metadata.location_map`
-  keyed by the same scene IDs. Start each readable location summary with its
-  stable `location_id`; the typed scene record holds the master angle, camera
-  axis, anchors, and lighting contract.
+- `scene_plan.metadata.continuity_scene_ids` names the scenes governed by v1;
+  new strict projects list every planned scene, while existing opted-in projects
+  list only newly planned/replanned scenes. The `scene_continuity` keys must
+  match that list; already approved legacy scenes remain unmarked. Start each
+  strict scene's readable `location_map` summary with its stable `location_id`.
+  The typed scene record holds the master angle, camera axis, anchors, and light.
 - At shot-spec authoring, register each shot with both `shot_id` and `scene_id`.
   Use a shared `entity_id` for state variants of one recurring character or prop
   (for example, `hero-dry` and `hero-wet` both use `entity_id="hero"`). A

@@ -33,7 +33,7 @@ def _review(root, *, dimensions=None, override_reason=None):
     return result
 
 
-def _catalog_with_selected_shot(root, *, shot_id="s01-sh01", scene_id="s01", take_id="take-a", strict=True):
+def _catalog_with_selected_shot(root, *, shot_id="s01-sh01", scene_id="s01", take_id="take-a", strict=True, select=True, record_review=True):
     _write_media(root, "assets/images/hero-wet.png", f"assets/video/{take_id}.mp4")
     catalog = NarrativeAssets(root)
     catalog.put_asset("hero-wet", "character", "Courier in a soaked coat", "assets/images/hero-wet.png", state="wet")
@@ -43,7 +43,10 @@ def _catalog_with_selected_shot(root, *, shot_id="s01-sh01", scene_id="s01", tak
         catalog.register_shot(shot_id, scene_id)
     catalog.link_assets(shot_id, ["hero-wet"])
     catalog.add_take(shot_id, take_id, f"assets/video/{take_id}.mp4", 4.0)
-    catalog.select_take(shot_id, take_id)
+    if strict and record_review:
+        catalog.record_continuity_review(shot_id, take_id, _review(root))
+    if select:
+        catalog.select_take(shot_id, take_id)
     return catalog
 
 
@@ -71,6 +74,7 @@ def test_scene_id_survives_multiple_shots_in_manifest(tmp_path):
         catalog.register_shot(shot_id, "s01", continuity_contract_version="1.0")
         catalog.link_assets(shot_id, ["hero"])
         catalog.add_take(shot_id, take_id, f"assets/video/{take_id}.mp4", 4.0)
+        catalog.record_continuity_review(shot_id, take_id, _review(tmp_path))
         catalog.select_take(shot_id, take_id)
 
     manifest = catalog.asset_manifest()
@@ -103,19 +107,41 @@ def test_state_variants_share_entity_id_and_review_requires_all_dimensions(tmp_p
         catalog.record_continuity_review("s01-sh01", "take-a", incomplete)
 
 
-def test_review_drift_requires_override_reason(tmp_path):
-    catalog = _catalog_with_selected_shot(tmp_path)
+def test_review_drift_can_be_recorded_for_candidate_audit(tmp_path):
+    catalog = _catalog_with_selected_shot(tmp_path, select=False, record_review=False)
     dimensions = {name: "pass" for name in _REVIEW_DIMENSIONS}
     dimensions["location_anchors"] = "drift"
     review = _review(tmp_path, dimensions=dimensions)
 
-    with pytest.raises(ValueError, match="override"):
-        catalog.record_continuity_review("s01-sh01", "take-a", review)
+    catalog.record_continuity_review("s01-sh01", "take-a", review)
+    saved_review = catalog.data["shots"]["s01-sh01"]["takes"]["take-a"]["metadata"]["continuity_review"]
+    assert saved_review["dimensions"]["location_anchors"] == "drift"
+    assert Path(saved_review["reviewed_path"]).as_posix() == "assets/video/take-a.mp4"
 
-    catalog.record_continuity_review("s01-sh01", "take-a", {**review, "override_reason": "Intentional impossible geography for a dream beat."})
-    exported = catalog.asset_manifest()["metadata"]["continuity_reviews"]["s01-sh01"]
-    assert exported["override_reason"] == "Intentional impossible geography for a dream beat."
-    assert Path(exported["reviewed_path"]).as_posix() == "assets/video/take-a.mp4"
+
+def test_select_take_rejects_strict_candidate_without_review(tmp_path):
+    catalog = _catalog_with_selected_shot(tmp_path, select=False, record_review=False)
+
+    with pytest.raises(ValueError, match="continuity review"):
+        catalog.select_take("s01-sh01", "take-a")
+
+    catalog.record_continuity_review("s01-sh01", "take-a", _review(tmp_path))
+    catalog.select_take("s01-sh01", "take-a")
+    assert catalog.data["shots"]["s01-sh01"]["selected"] == "take-a"
+
+
+def test_select_take_rejects_drift_without_override_and_accepts_recorded_override(tmp_path):
+    catalog = _catalog_with_selected_shot(tmp_path, select=False, record_review=False)
+    dimensions = {name: "pass" for name in _REVIEW_DIMENSIONS}
+    dimensions["location_anchors"] = "drift"
+    review = _review(tmp_path, dimensions=dimensions)
+    catalog.record_continuity_review("s01-sh01", "take-a", review)
+
+    with pytest.raises(ValueError, match="override"):
+        catalog.select_take("s01-sh01", "take-a")
+
+    catalog.record_continuity_review("s01-sh01", "take-a", {**review, "override_reason": "Approved dream beat."})
+    catalog.select_take("s01-sh01", "take-a")
 
 
 def test_review_rejects_unknown_dimension_keys(tmp_path):

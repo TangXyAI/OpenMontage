@@ -114,6 +114,12 @@
     "metadata": {
       "type": "object",
       "properties": {
+        "continuity_scene_ids": {
+          "type": "array",
+          "description": "Scene IDs governed by continuity contract v1.0; unlisted scenes may remain legacy",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "location_map": {
           "type": "object",
           "description": "Human-readable scene location summaries keyed by scene id",

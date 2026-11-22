@@ -75,6 +75,7 @@ def _fixture(tmp_path, *, declare_change=False):
             {"id": "s02", "type": "generated", "description": "Rain outside", "start_seconds": 8, "end_seconds": 12},
         ],
         "metadata": {
+            "continuity_scene_ids": ["s01", "s02"],
             "location_map": {
                 "s01": "loc-workshop — doorway, workbench camera-left, window key from camera-left.",
                 "s02": "loc-alley — brick wall camera-right, streetlamp behind camera.",
@@ -147,6 +148,17 @@ def test_legacy_mode_skips_new_continuity_requirements():
         continuity_mode({"metadata": {"continuity_contract_version": "2.0"}})
 
     validate_shot_continuity({"version": "1.0", "scenes": []}, {"version": "1.0", "shots": []}, {}, Path("."), strict=False)
+
+
+def test_opted_in_project_keeps_approved_legacy_scene_unmarked(tmp_path):
+    scene_plan, shot_specs, catalog_data = _fixture(tmp_path, declare_change=True)
+    scene_plan["metadata"]["continuity_scene_ids"] = ["s01"]
+    scene_plan["metadata"]["scene_continuity"].pop("s02")
+    shot_specs["shots"][2].pop("continuity")
+    catalog_data["shots"]["s02-sh01"].pop("continuity_contract_version")
+
+    validate_scene_plan_continuity(scene_plan, strict=True)
+    validate_shot_continuity(scene_plan, shot_specs, catalog_data, tmp_path, strict=True)
 
 
 def test_nonadjacent_entity_state_change_requires_declared_delta(tmp_path):

@@ -14,10 +14,11 @@
 
 - Scope is `pipeline_defs/cinematic.yaml` production mode `narrative_generated`; source-led and other pipelines remain unchanged.
 - `scene_plan.metadata.location_map` remains an optional object whose values are non-empty strings; `scene_plan.metadata.scene_continuity` remains optional in the schema so legacy scene plans validate.
+- `scene_plan.metadata.continuity_scene_ids` lists scenes governed by continuity contract `"1.0"`; unlisted, previously approved scenes remain legacy during an opt-in.
 - `proposal_packet.metadata.continuity_contract_version` value `"1.0"` enables strict mode; a missing value means legacy mode.
 - New narrative-generated projects default to strict mode; existing projects stay in legacy mode unless the user opts in through the approved proposal stage and a `decision_log` `approval_policy` entry with subject `Scene continuity contract version`.
 - Validate scene structure before reference-sheet/plate generation; validate shot specs and approved references after the `asset_sheets` gate and before video-shot generation.
-- Track each character/prop state from its last appearance, including nonadjacent shots; location geometry and lighting reset according to each new scene's contract.
+- Track each character/prop state from its last strict appearance, including nonadjacent shots; an unmarked legacy scene resets that state ledger because its internal changes are not covered by contract v1. Location geometry and lighting reset according to each new scene's contract.
 - Require a separate approved reference for visually salient state that persists across shots; represent transient one-shot state in shot data.
 - A `drift` or `unclear` review is blocked by default and needs an explicit user override reason before selection.
 - Review evidence is tied to the current selected media path; changing a take through enhancement makes its prior review stale.
@@ -29,7 +30,7 @@
 
 - Legacy proposal/catalog data without continuity markers remains readable and does not acquire strict review requirements — test in Tasks 1, 2, and 5.
 - Multiple shots in one scene keep a shared `scene_id` and unique `shot_id` through catalog and manifest export — test in Task 2.
-- A recurring entity's last state is checked after intervening shots/scenes where it is absent; explicit transitions pass — test in Task 3.
+- A recurring entity's last state is checked after intervening strict shots where it is absent; an unmarked legacy scene resets tracking, and explicit transitions pass — test in Tasks 3 and 5.
 - Missing, mismatched, or outside-project reference assets stop strict video-shot generation before provider calls — test in Tasks 3 and 4.
 - Enhancement cannot leave a selected take with stale review evidence; legacy takes continue through the compose guard — test in Task 5.
 
@@ -59,6 +60,7 @@
 
 **Interfaces:**
 - Proposal metadata may contain `continuity_contract_version: "1.0"`; absence means legacy.
+- `scene_plan.metadata.continuity_scene_ids` names strict scene IDs; a new strict project lists every planned scene, while an opted-in existing project lists only newly planned/replanned scenes.
 - `scene_plan.metadata.scene_continuity` is an object keyed by scene ID. Each value contains `location_id`, `master_angle`, `camera_axis`, `anchors[]` (`id`, `position`), `lighting` (`key_source`, `direction`, `shadow_direction`), optional `constants` (`time_of_day`, `weather`, `palette`), and `allowed_changes[]`.
 - Keep `scene_plan.metadata.location_map[scene_id]` as a non-empty, human-readable summary derived from that typed contract; the strict validator checks both maps cover the same scenes and describe the same location.
 - A shot's optional `continuity` object contains `contract_version`, `location_id`, nullable `previous_shot_id`, `entities[]` (`entity_id`, `asset_id`, `state`), `carried_states[]`, `intentional_changes[]` (`entity_id`, `from_state`, `to_state`, `reason`), `screen_direction`, `gaze_targets[]`, and `hand_prop_states[]`.
@@ -190,8 +192,8 @@ git commit -m "feat: persist narrative continuity metadata"
 **Interfaces:**
 - `ContinuityValidationError(ValueError)` exposes an ordered `issues: tuple[str, ...]` suitable for a stage report.
 - `continuity_mode(proposal_packet: Mapping[str, Any]) -> Literal["legacy", "strict"]` returns `legacy` when the marker is absent and `strict` for version `"1.0"`; unknown versions raise `ContinuityValidationError`.
-- `validate_scene_plan_continuity(scene_plan: Mapping[str, Any], *, strict: bool) -> None` checks required scene maps and stable location IDs in strict mode; it is a no-op for legacy mode.
-- `validate_shot_continuity(scene_plan: Mapping[str, Any], shot_specs: Mapping[str, Any], catalog_data: Mapping[str, Any], project_root: str | Path, *, strict: bool) -> None` checks shot/scene IDs, locations, asset identity/state, paths, and entity state transitions.
+- `validate_scene_plan_continuity(scene_plan: Mapping[str, Any], *, strict: bool) -> None` checks `continuity_scene_ids` and contracts for those scenes; unlisted scenes remain legacy even when the proposal is opted in.
+- `validate_shot_continuity(scene_plan: Mapping[str, Any], shot_specs: Mapping[str, Any], catalog_data: Mapping[str, Any], project_root: str | Path, *, strict: bool) -> None` checks shots belonging to `continuity_scene_ids`; it skips grandfathered legacy-scene shots and resets the last-state ledger when crossing them.
 - `build_shot_context(shot: Mapping[str, Any], scene_contract: Mapping[str, Any], catalog_data: Mapping[str, Any], project_root: str | Path) -> dict[str, Any]` returns stable descriptors, role-labeled reference paths, location locks, carried states, intentional changes, and shot-specific action/framing. It does not write provider syntax or select a provider.
 - For each strict shot, validation requires a `references[]` entry with role `location` whose catalog asset is kind `location`, has `entity_id == scene_contract["location_id"]`, and state `master_plate`; this binds the approved empty plate at the asset-sheets gate.
 
@@ -312,9 +314,20 @@ git commit -m "docs: wire continuity checks into cinematic workflow"
 ## Task 5: Enforce Current Review Evidence Before Compose
 
 **Files:**
+- Modify: `schemas/artifacts/scene_plan.schema.json`
+- Modify: `lib/narrative_continuity.py`
+- Modify: `docs/superpowers/specs/2026-11-22-scene-consistency-design.md`
+- Modify: `docs/superpowers/plans/2026-11-22-scene-consistency.md`
 - Modify: `lib/narrative_assets.py`
+- Modify: `docs/narrative-production.md`
+- Modify: `skills/creative/narrative-consistency.md`
+- Modify: `skills/pipelines/cinematic/scene-director.md`
+- Modify: `skills/pipelines/cinematic/asset-director.md`
 - Modify: `tools/video/video_compose.py`
 - Modify: `tests/contracts/test_narrative_edit_integration.py`
+- Modify: `tests/contracts/test_narrative_continuity_schemas.py`
+- Modify: `tests/lib/test_narrative_continuity.py`
+- Modify: `tests/contracts/test_narrative_workflow.py`
 - Create: `tests/contracts/test_narrative_continuity_workflow.py`
 - Modify: `tests/lib/test_narrative_assets.py`
 - Modify: `tests/lib/test_narrative_enhancement.py`
@@ -322,6 +335,7 @@ git commit -m "docs: wire continuity checks into cinematic workflow"
 **Interfaces:**
 - Extend `_validate_narrative_selection(inputs)` to read the approved proposal marker and require continuity reviews only for shot records carrying contract version `"1.0"`.
 - Extend `NarrativeAssets.select_take` so strict shots require current-path review evidence; a `drift` or `unclear` review is selectable only when it carries a non-empty override reason.
+- Extend `NarrativeAssets.edit_decisions` to export `metadata.continuity_shots` for each requested shot, preserving `scene_id` and the optional contract version into the edit checkpoint.
 - For strict shots, the asset manifest, asset checkpoint, catalog, and edit checkpoint must agree on selected `take_id`, `scene_id`, and current media path.
 - Reject missing/stale review evidence and any unresolved `drift`/`unclear` dimension. Accept an explicit `override_reason` and legacy shots without continuity markers.
 - Preserve all existing selected-take and checkpoint checks.
@@ -353,21 +367,26 @@ def test_select_take_rejects_drift_without_override_and_accepts_recorded_overrid
 def test_compose_allows_drift_only_with_recorded_override(tmp_path):
     assert result.success
 
+def test_opted_in_project_keeps_approved_legacy_scene_unmarked(tmp_path):
+    scene_plan["metadata"]["continuity_scene_ids"] = ["s01"]
+    assert validate_scene_plan_continuity(scene_plan, strict=True) is None
+    assert validate_shot_continuity(scene_plan, shot_specs_with_legacy_s02, catalog_data_with_legacy_s02, tmp_path, strict=True) is None
+
 def test_strict_narrative_pilot_preserves_state_and_review_through_compose(tmp_path):
     assert [item["scene_id"] for item in manifest["assets"] if item["type"] == "video"] == ["s01", "s01", "s02"]
     assert result.success
 ```
 - [ ] **Step 2: Run the focused integration tests and confirm strict cases fail** because the compose guard does not yet inspect continuity evidence.
 
-Run: `.\.venv\Scripts\python.exe -m pytest tests/contracts/test_narrative_edit_integration.py tests/lib/test_narrative_assets.py tests/lib/test_narrative_enhancement.py -q`
+Run: `.\.venv\Scripts\python.exe -m pytest tests/contracts/test_narrative_continuity_schemas.py tests/contracts/test_narrative_edit_integration.py tests/lib/test_narrative_assets.py tests/lib/test_narrative_continuity.py tests/lib/test_narrative_enhancement.py -q`
 
 Expected: new strict-mode cases fail; existing legacy narrative selection cases pass.
 
-- [ ] **Step 3: Extend `_validate_narrative_selection`** to check strict-shot review records against the selected catalog take and approved manifest/checkpoints.
+- [ ] **Step 3: Extend `NarrativeAssets.edit_decisions` and `_validate_narrative_selection`** to carry the scene map into edit decisions and check strict-shot review records against the selected catalog take and approved manifest/checkpoints.
 - [ ] **Step 4: Confirm the compose guard rejects a manifest whose review path no longer matches the enhanced selected media**, while a renewed assets approval with fresh evidence passes.
 - [ ] **Step 5: Run the focused integration tests** and confirm stale paths are rejected while legacy and documented-override cases behave as specified.
 
-Run: `.\.venv\Scripts\python.exe -m pytest tests/contracts/test_narrative_edit_integration.py tests/contracts/test_narrative_continuity_workflow.py tests/lib/test_narrative_enhancement.py -q`
+Run: `.\.venv\Scripts\python.exe -m pytest tests/contracts/test_narrative_continuity_schemas.py tests/contracts/test_narrative_edit_integration.py tests/contracts/test_narrative_continuity_workflow.py tests/lib/test_narrative_assets.py tests/lib/test_narrative_continuity.py tests/lib/test_narrative_enhancement.py -q`
 
 Expected: PASS.
 
@@ -380,7 +399,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit the compose guard and integration tests.**
 
 ```powershell
-git add tools/video/video_compose.py tests/contracts/test_narrative_edit_integration.py tests/contracts/test_narrative_continuity_workflow.py tests/lib/test_narrative_enhancement.py
+git add docs/superpowers/specs/2026-11-22-scene-consistency-design.md docs/superpowers/plans/2026-11-22-scene-consistency.md docs/narrative-production.md skills/creative/narrative-consistency.md schemas/artifacts/scene_plan.schema.json lib/narrative_assets.py lib/narrative_continuity.py skills/pipelines/cinematic/scene-director.md skills/pipelines/cinematic/asset-director.md tools/video/video_compose.py tests/contracts/test_narrative_continuity_schemas.py tests/contracts/test_narrative_edit_integration.py tests/contracts/test_narrative_workflow.py tests/contracts/test_narrative_continuity_workflow.py tests/lib/test_narrative_assets.py tests/lib/test_narrative_continuity.py tests/lib/test_narrative_enhancement.py
 git commit -m "feat: require current continuity review before compose"
 ```
 

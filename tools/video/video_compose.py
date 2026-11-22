@@ -38,9 +38,10 @@ import secrets
 import shutil
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from tools.base_tool import (
     BaseTool,
@@ -442,21 +443,109 @@ class VideoCompose(BaseTool):
         if not (project_root / "artifacts" / "narrative_assets.json").is_file():
             return ToolResult(success=False, error="Narrative selection catalog is missing")
         catalog = NarrativeAssets(project_root)
-        manifest_selection = (inputs.get("asset_manifest") or {}).get("metadata", {}).get("narrative_selection", {})
+        manifest = inputs.get("asset_manifest") or {}
+        manifest_metadata = manifest.get("metadata", {})
+        manifest_selection = manifest_metadata.get("narrative_selection", {})
+        proposal_checkpoint = read_checkpoint(project_root.parent, project_root.name, "proposal")
         asset_checkpoint = read_checkpoint(project_root.parent, project_root.name, "assets")
         edit_checkpoint = read_checkpoint(project_root.parent, project_root.name, "edit")
-        approved_selection = ((asset_checkpoint or {}).get("artifacts", {}).get("asset_manifest", {}).get("metadata", {}).get("narrative_selection", {}))
-        edit_selection = ((edit_checkpoint or {}).get("artifacts", {}).get("edit_decisions", {}).get("metadata", {}).get("narrative_selection", {}))
+        approved_manifest = (asset_checkpoint or {}).get("artifacts", {}).get("asset_manifest", {})
+        approved_edit = (edit_checkpoint or {}).get("artifacts", {}).get("edit_decisions", {})
+        approved_manifest_metadata = approved_manifest.get("metadata", {})
+        edit_metadata = edit.get("metadata", {})
+        approved_edit_metadata = approved_edit.get("metadata", {})
+        approved_selection = approved_manifest_metadata.get("narrative_selection", {})
+        edit_selection = approved_edit_metadata.get("narrative_selection", {})
         if (not asset_checkpoint or asset_checkpoint.get("status") != "completed"
                 or not asset_checkpoint.get("human_approved")
                 or not edit_checkpoint or edit_checkpoint.get("status") != "completed"):
             return ToolResult(success=False, error="Narrative selection requires approved assets and completed edit checkpoints")
+
+        from lib.narrative_continuity import ContinuityValidationError, continuity_mode
+        proposal_packet = (proposal_checkpoint or {}).get("artifacts", {}).get("proposal_packet", {})
+        try:
+            proposal_mode = continuity_mode(proposal_packet)
+        except ContinuityValidationError as exc:
+            return ToolResult(success=False, error=str(exc))
+        proposal_is_approved = bool(
+            proposal_checkpoint
+            and proposal_checkpoint.get("status") == "completed"
+            and proposal_checkpoint.get("human_approved")
+        )
+
         for shot_id, take_id in selection.items():
-            if (catalog.data.get("shots", {}).get(shot_id, {}).get("selected") != take_id
+            catalog_shot = catalog.data.get("shots", {}).get(shot_id, {})
+            if (catalog_shot.get("selected") != take_id
                     or manifest_selection.get(shot_id) != take_id
                     or approved_selection.get(shot_id) != take_id
                     or edit_selection.get(shot_id) != take_id):
                 return ToolResult(success=False, error=f"Narrative selection changed for {shot_id}; renew asset approval and edit")
+
+            if catalog_shot.get("continuity_contract_version") != "1.0":
+                continue
+            if proposal_mode != "strict" or not proposal_is_approved:
+                return ToolResult(success=False, error=f"Strict continuity selection requires an approved proposal for {shot_id}")
+
+            scene_id = catalog_shot.get("scene_id", shot_id)
+            expected_scene = {"scene_id": scene_id, "continuity_contract_version": "1.0"}
+            scene_maps = (
+                ("asset manifest", manifest_metadata.get("continuity_shots", {})),
+                ("approved asset manifest", approved_manifest_metadata.get("continuity_shots", {})),
+                ("edit decisions", edit_metadata.get("continuity_shots", {})),
+                ("approved edit decisions", approved_edit_metadata.get("continuity_shots", {})),
+            )
+            for label, scene_map in scene_maps:
+                if not isinstance(scene_map, Mapping) or scene_map.get(shot_id) != expected_scene:
+                    return ToolResult(success=False, error=f"Scene continuity mapping is stale in {label} for {shot_id}")
+
+            take = catalog_shot.get("takes", {}).get(take_id, {})
+            take_path = take.get("path")
+            current_path = (project_root / take_path).resolve() if isinstance(take_path, str) else None
+            if current_path is None or not current_path.is_relative_to(project_root) or not current_path.is_file():
+                return ToolResult(success=False, error=f"Strict narrative take is missing or outside the project for {shot_id}")
+
+            review = take.get("metadata", {}).get("continuity_review")
+            if not isinstance(review, Mapping):
+                return ToolResult(success=False, error=f"Strict narrative selection has no continuity review for {shot_id}")
+            if review.get("reviewed_path") != take_path:
+                return ToolResult(success=False, error=f"Continuity review is stale for the selected media path of {shot_id}")
+
+            expected_review = {"take_id": take_id, **review}
+            review_maps = (
+                ("asset manifest", manifest_metadata.get("continuity_reviews", {})),
+                ("approved asset manifest", approved_manifest_metadata.get("continuity_reviews", {})),
+            )
+            for label, review_map in review_maps:
+                if not isinstance(review_map, Mapping) or review_map.get(shot_id) != expected_review:
+                    return ToolResult(success=False, error=f"Continuity review is missing or stale in {label} for {shot_id}")
+
+            dimensions = review.get("dimensions", {})
+            if not isinstance(dimensions, Mapping):
+                return ToolResult(success=False, error=f"Continuity review dimensions are invalid for {shot_id}")
+            unresolved = any(value in {"drift", "unclear"} for value in dimensions.values())
+            override_reason = review.get("override_reason")
+            if unresolved and (not isinstance(override_reason, str) or not override_reason.strip()):
+                return ToolResult(success=False, error=f"Continuity review needs an override reason for {shot_id}")
+
+            for evidence_path in review.get("evidence_paths", []):
+                evidence = Path(evidence_path)
+                evidence = evidence.resolve() if evidence.is_absolute() else (project_root / evidence).resolve()
+                if not evidence.is_relative_to(project_root) or not evidence.is_file():
+                    return ToolResult(success=False, error=f"Continuity review evidence is missing or outside the project for {shot_id}")
+
+            expected_asset_id = f"take:{quote(shot_id, safe='')}:{quote(take_id, safe='')}"
+            for label, current_manifest in (("asset manifest", manifest), ("approved asset manifest", approved_manifest)):
+                rows = current_manifest.get("assets", [])
+                selected_asset = next((row for row in rows if row.get("id") == expected_asset_id), None)
+                if (not isinstance(selected_asset, Mapping)
+                        or selected_asset.get("scene_id") != scene_id
+                        or not isinstance(selected_asset.get("path"), str)):
+                    return ToolResult(success=False, error=f"Strict narrative take is missing from {label} for {shot_id}")
+                asset_path = Path(selected_asset["path"])
+                asset_path = asset_path.resolve() if asset_path.is_absolute() else (project_root / asset_path).resolve()
+                if asset_path != current_path:
+                    return ToolResult(success=False, error=f"Continuity review or take path is stale in {label} for {shot_id}")
+
         lookup = {asset["id"]: asset["path"] for asset in (inputs.get("asset_manifest") or {}).get("assets", [])}
         candidates = {}
         for shot_id, shot in catalog.data.get("shots", {}).items():

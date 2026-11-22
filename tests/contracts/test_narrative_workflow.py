@@ -88,7 +88,6 @@ def test_continuity_review_export_matches_asset_manifest_schema(tmp_path):
     catalog.register_shot("s01-sh01", "s01", continuity_contract_version="1.0")
     catalog.link_assets("s01-sh01", ["hero"])
     catalog.add_take("s01-sh01", "take-a", "take.mp4", 4.0)
-    catalog.select_take("s01-sh01", "take-a")
     dimensions = {
         "identity_wardrobe": "pass",
         "location_anchors": "pass",
@@ -102,6 +101,7 @@ def test_continuity_review_export_matches_asset_manifest_schema(tmp_path):
         "notes": notes,
         "evidence_paths": ["review.png"],
     })
+    catalog.select_take("s01-sh01", "take-a")
     manifest = catalog.asset_manifest()
     schema = json.loads((Path(__file__).parents[2] / "schemas/artifacts/asset_manifest.schema.json").read_text(encoding="utf-8"))
     jsonschema.validate(manifest, schema)
