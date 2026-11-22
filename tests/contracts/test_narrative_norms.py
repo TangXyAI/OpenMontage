@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRED = {
     "narrative-consistency.md": [
-        "## Asset order", "## Character sheets", "## Scene lock",
+        "## Asset order", "## Continuity contract", "## Character sheets", "## Scene lock",
         "## Stress test", "## Take budget",
     ],
     "video-model-selection.md": [

@@ -71,6 +71,38 @@ For `narrative_generated` productions, work through this chain in order. Each st
 
    This is the `model_selection` sub-stage; no approved route means no generation.
 6. **Shot specs.** Write one model-neutral shot spec per shot and validate it against `schemas/artifacts/shot_spec.schema.json`: `shot_id`, `scene_id`, `duration_seconds`, `scene_context`, `references` (asset id, kind, path, role), `location_map`, `first_frame`, `format_mode`, `optics`, `camera`, `action_timing`, `physics`, `lighting`, `audio`, `character_acting`, `style`, `quality`, and `constraints`. Provider-specific parameters belong in the asset manifest, never in the shot spec.
+   For a strict continuity proposal, include the shot's versioned `continuity` object and register the distinct scene/shot IDs with `NarrativeAssets`.
+
+### Strict continuity check
+
+After the `asset_sheets` approval and once the shot specs are complete, register
+each shot with `catalog.register_shot(shot_id, scene_id,
+continuity_contract_version="1.0")`. Then call `validate_shot_continuity`
+before prompt compilation and before `Batch takes`. Before this check, persist
+each approved sheet with `put_asset` using its stable `entity_id` and state, and
+link the sheet references to every shot that uses them. This check verifies the
+approved master plate, state variants, and references are linked and entity
+state changes are declared. A missing or inconsistent reference is a
+pre-generation blocker, not a reason to try a different provider.
+
+After an enhancement changes the selected media, sample the enhanced file and
+record a fresh review before re-exporting the manifest. The prior review does
+not approve the enhanced media.
+
+For each validated shot, call `build_shot_context` and pass its stable
+descriptors and role-labeled reference paths into the selected provider's
+Layer 3 prompt workflow. Copy the approved descriptor verbatim and use only the
+shot's linked identity, location, and prop references. Provider-specific prompt
+dialect and model choice remain in the existing route.
+
+At the later assets selection gate, review representative frames for every
+candidate across the five continuity dimensions and call
+`catalog.record_continuity_review(shot_id, take_id, review)` before selecting.
+Rejected `drift`/`unclear` candidates may be recorded without an override;
+`NarrativeAssets.select_take` refuses to select them unless the user records an
+explicit override reason. If enhancement changes the selected media, sample the
+enhanced file and record a fresh review before re-exporting the manifest.
+
 7. **Prompt compilation.** Compile each shot spec into the chosen model's prompt dialect — read `.agents/skills/hyperflow-h3/`, `.agents/skills/minimax-h3/`, or the matching Layer 3 skill. Copy the approved descriptor verbatim; add only scene-specific action, framing, and timing. Run the pre/post self-review below before sending anything.
 8. **Batch takes.** Generate inside the **take budget** — **2–4 takes per shot**, drafted at lower resolution within the same family where possible. A weak prompt is not fixed by more takes; if none of them lands, revisit the shot spec or the asset instead of extending the budget silently.
 9. **Selection.** Present the takes to the human at the assets gate, then `select_take` the approved candidate and export `asset_manifest()`.
@@ -162,8 +194,12 @@ do not describe the hosted H3 Partner Node as local inference. Read the
 ComfyUI and MiniMax H3 skills before generating.
 
 Persist reusable references and takes with `lib.narrative_assets.NarrativeAssets`.
-Use `put_asset` for each character, location or prop state; `link_assets`
-associates reference IDs with a scene. Use `add_take` for every candidate and
+Use `put_asset` for each character, location or prop state. In strict continuity
+mode, assign state variants a shared `entity_id`, give the approved empty plate
+`kind="location"`, `state="master_plate"`, and its stable location ID as
+`entity_id`. Call `register_shot(shot_id, scene_id, continuity_contract_version="1.0")`
+and then use `link_assets` to associate that shot with its approved references.
+Use `add_take` for every candidate and
 record its prompt, seed, model, source tool and workflow provenance in metadata.
 After user review, `select_take` marks the selected take without deleting other
 versions. Export `asset_manifest()` to the canonical assets artifact and pass

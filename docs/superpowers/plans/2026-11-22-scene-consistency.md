@@ -125,7 +125,7 @@ git commit -m "feat: define narrative continuity contracts"
 - Add `register_shot(shot_id: str, scene_id: str, *, continuity_contract_version: str | None = None) -> None`. Re-registering with the same values is idempotent; conflicting scene IDs raise `ValueError`.
 - Add `record_continuity_review(shot_id: str, take_id: str, review: Mapping[str, Any]) -> None`. The catalog fills `reviewed_path` from the current take and validates project-relative evidence paths.
 - Review dimensions are `identity_wardrobe`, `location_anchors`, `camera_continuity`, `light_and_look`, and `story_state`; values are `pass`, `intentional_change`, `drift`, or `unclear`.
-- Export each review as `take_id`, `reviewed_path`, `dimensions` (all five keys required), `notes` (keyed by dimension), `evidence_paths` (at least one project-relative path), and optional `override_reason`; any `drift` or `unclear` dimension requires a non-empty override reason.
+- Export each selected review as `take_id`, `reviewed_path`, `dimensions` (all five keys required), `notes` (keyed by dimension), `evidence_paths` (at least one project-relative path), and optional `override_reason`. Candidate records may contain `drift` or `unclear` without an override; selecting/exporting one requires a non-empty override reason.
 - `asset_manifest()` exports `metadata.continuity_shots` keyed by shot ID (`scene_id`, optional contract version) and `metadata.continuity_reviews` keyed by shot ID for current-path reviews only.
 - `apply_enhancement()` invalidates review evidence when it changes the selected take path.
 
@@ -143,10 +143,9 @@ def test_state_variants_share_entity_id_and_review_requires_all_dimensions(tmp_p
     with pytest.raises(ValueError, match="story_state"):
         catalog.record_continuity_review("s01-sh01", "take-a", incomplete_review)
 
-def test_review_drift_requires_override_reason(tmp_path):
-    with pytest.raises(ValueError, match="override"):
-        catalog.record_continuity_review("s01-sh01", "take-a", drift_review)
-    catalog.record_continuity_review("s01-sh01", "take-a", {**drift_review, "override_reason": "approved exception"})
+def test_review_drift_can_be_recorded_for_candidate_audit(tmp_path):
+    catalog.record_continuity_review("s01-sh01", "take-a", drift_review)
+    assert catalog.data["shots"]["s01-sh01"]["takes"]["take-a"]["metadata"]["continuity_review"]["dimensions"]["location_anchors"] == "drift"
 
 def test_review_rejects_unknown_dimension_keys(tmp_path):
     invalid_review["dimensions"]["costume"] = "pass"
@@ -313,13 +312,16 @@ git commit -m "docs: wire continuity checks into cinematic workflow"
 ## Task 5: Enforce Current Review Evidence Before Compose
 
 **Files:**
+- Modify: `lib/narrative_assets.py`
 - Modify: `tools/video/video_compose.py`
 - Modify: `tests/contracts/test_narrative_edit_integration.py`
 - Create: `tests/contracts/test_narrative_continuity_workflow.py`
+- Modify: `tests/lib/test_narrative_assets.py`
 - Modify: `tests/lib/test_narrative_enhancement.py`
 
 **Interfaces:**
 - Extend `_validate_narrative_selection(inputs)` to read the approved proposal marker and require continuity reviews only for shot records carrying contract version `"1.0"`.
+- Extend `NarrativeAssets.select_take` so strict shots require current-path review evidence; a `drift` or `unclear` review is selectable only when it carries a non-empty override reason.
 - For strict shots, the asset manifest, asset checkpoint, catalog, and edit checkpoint must agree on selected `take_id`, `scene_id`, and current media path.
 - Reject missing/stale review evidence and any unresolved `drift`/`unclear` dimension. Accept an explicit `override_reason` and legacy shots without continuity markers.
 - Preserve all existing selected-take and checkpoint checks.
@@ -338,6 +340,16 @@ def test_compose_rejects_review_for_pre_enhancement_path(tmp_path):
 def test_compose_allows_legacy_selection_without_continuity_review(tmp_path):
     assert result.success
 
+def test_select_take_rejects_strict_candidate_without_review(tmp_path):
+    with pytest.raises(ValueError, match="continuity review"):
+        catalog.select_take("s01-sh01", "take-a")
+
+def test_select_take_rejects_drift_without_override_and_accepts_recorded_override(tmp_path):
+    with pytest.raises(ValueError, match="override"):
+        catalog.select_take("s01-sh01", "take-a")
+    catalog.record_continuity_review("s01-sh01", "take-a", {**drift_review, "override_reason": "approved exception"})
+    catalog.select_take("s01-sh01", "take-a")
+
 def test_compose_allows_drift_only_with_recorded_override(tmp_path):
     assert result.success
 
@@ -347,7 +359,7 @@ def test_strict_narrative_pilot_preserves_state_and_review_through_compose(tmp_p
 ```
 - [ ] **Step 2: Run the focused integration tests and confirm strict cases fail** because the compose guard does not yet inspect continuity evidence.
 
-Run: `.\.venv\Scripts\python.exe -m pytest tests/contracts/test_narrative_edit_integration.py tests/lib/test_narrative_enhancement.py -q`
+Run: `.\.venv\Scripts\python.exe -m pytest tests/contracts/test_narrative_edit_integration.py tests/lib/test_narrative_assets.py tests/lib/test_narrative_enhancement.py -q`
 
 Expected: new strict-mode cases fail; existing legacy narrative selection cases pass.
 

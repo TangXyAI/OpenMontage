@@ -34,9 +34,9 @@ in the chain is locked.
    **before locking** the sheet. Done means approved for batch, not merely generated.
 
 Record every approved asset under `assets/references/{characters,locations,props}/`
-and link it in `narrative_assets.json`. References stay in the catalog:
-`asset_manifest.json` receives only the final selected takes, never the
-reference sheets.
+and link only shot-relevant references in `narrative_assets.json`. The exported
+`asset_manifest.json` includes those linked references and the selected take;
+unselected takes and unlinked reference sheets stay in the catalog.
 
 ## Character sheets
 
@@ -70,6 +70,39 @@ performance is generated.
 - **Optional 360° empty-scene sweep.** For reverse angles / shot-reverse-shot
   coverage, generate a slow sweep of the empty scene to fill in the off-camera space
   and reduce drift when the camera crosses the axis.
+
+## Continuity contract
+
+Strict continuity is enabled when the approved proposal records
+`metadata.continuity_contract_version: "1.0"`. A missing marker means legacy
+mode; do not retrofit already approved shots when an existing project opts in.
+
+- Keep `scene_plan.metadata.scene_continuity` and `scene_plan.metadata.location_map`
+  keyed by the same scene IDs. Start each readable location summary with its
+  stable `location_id`; the typed scene record holds the master angle, camera
+  axis, anchors, and lighting contract.
+- At shot-spec authoring, register each shot with both `shot_id` and `scene_id`.
+  Use a shared `entity_id` for state variants of one recurring character or prop
+  (for example, `hero-dry` and `hero-wet` both use `entity_id="hero"`). A
+  location plate is a `location` asset whose state is `master_plate`.
+- Track an entity's last known state across intervening shots where it is absent
+  and across scene boundaries. Location geometry and lighting use the current
+  scene contract; character and prop state carries forward unless an explicit
+  change or reset is recorded.
+- Before reference-sheet/plate generation, validate the planned scene contract.
+  After the `asset_sheets` approval and shot-spec authoring, validate linked
+  assets, references, file paths, and state transitions before compiling prompts
+  or generating video shots.
+- Build prompt context from the approved descriptor copied verbatim and only the
+  linked references for that shot. Label each reference by role (`identity`,
+  `location`, or `prop`) before passing the context to the selected provider's
+  prompt workflow.
+- Record every candidate take's review against the evidence frames and current
+  media path. Each dimension is `pass`, `intentional_change`, `drift`, or
+  `unclear`. Record `drift` and `unclear` candidates without an override for the
+  audit trail, but only select them with an explicit user override reason;
+  `NarrativeAssets.select_take` enforces this. Review the enhanced output again
+  after enhancement changes the selected media.
 
 ## Stress test
 

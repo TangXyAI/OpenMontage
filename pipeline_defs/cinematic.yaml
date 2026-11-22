@@ -216,6 +216,7 @@ stages:
       - Hero 3D worlds use the production fidelity tier with licensed textured models and PBR terrain layers; primitive-only blockouts cannot pass
       - Asset sheets are approved before any batch take generation
       - The user selected the model family and route before the first generation
+      - In strict narrative mode, every selected take has current continuity review evidence tied to its media path
     success_criteria:
       - Schema-valid asset_manifest artifact
       - All referenced asset files exist on disk

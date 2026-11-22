@@ -11,6 +11,7 @@ These are implementation defaults proposed by the agent; the user can change the
 - Make a separate approved reference for a visually salient state that persists across shots (for example, wet wardrobe, visible damage, or a changed prop). Describe a transient one-shot state in the shot contract without creating a permanent asset variant.
 - Mark projects with a continuity-contract version. New projects use strict validation; existing projects remain in legacy mode unless the user opts in. Opt-in applies to newly planned/generated shots and does not silently invalidate already approved shots.
 - A `drift` take is ineligible by default; the user may explicitly override it with a recorded reason. An `unclear` result must be resolved or explicitly overridden before the take can be selected.
+- Candidate review records may preserve `drift` or `unclear` without an override so rejected takes remain auditable; an override reason is required only to select/export that take.
 - Continuity review evidence must match the final selected media path. If enhancement changes that path, refresh the evidence and review before renewing assets approval.
 
 ## Intent

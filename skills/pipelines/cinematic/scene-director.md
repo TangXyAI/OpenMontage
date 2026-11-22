@@ -73,13 +73,57 @@ For `narrative_generated`, this list is the input to the asset-sheet gate; an as
 {
   "metadata": {
     "location_map": {
-      "s02": "Locked master angle from the door; table center-frame; window camera-left; single key light through the window, shadow falls right."
+      "s02": "loc-office — Locked master angle from the door; table center-frame; window camera-left; key through the window, shadow falls camera-right."
+    },
+    "scene_continuity": {
+      "s02": {
+        "location_id": "loc-office",
+        "master_angle": "From the doorway toward the table and window.",
+        "camera_axis": "Door-to-window axis.",
+        "anchors": [
+          {"id": "door", "position": "rear-center"},
+          {"id": "table", "position": "center-frame"},
+          {"id": "window", "position": "camera-left"}
+        ],
+        "lighting": {
+          "key_source": "window",
+          "direction": "camera-left",
+          "shadow_direction": "camera-right"
+        },
+        "constants": {"time_of_day": "night", "weather": "clear", "palette": "cool gray with amber practicals"},
+        "allowed_changes": ["Reverse angle may change camera-relative anchor positions."]
+      }
     }
   }
 }
 ```
 
 Each value is one string describing the locked master angle, named anchor objects (door, window, table, skyline), camera-relative positions, and the single light source and shadow direction. Copy the matching string into that scene's shots' `shot_spec.location_map`, so the location plate, the shot spec, and the take share one spatial contract. The asset director builds the empty location plate from it.
+
+### Strict narrative planning check
+
+When the approved proposal has `metadata.continuity_contract_version: "1.0"`,
+add `scene_plan.metadata.scene_continuity`, keyed by each scene ID. Each entry
+must define `location_id`, `master_angle`, `camera_axis`, named `anchors`,
+`lighting` (`key_source`, `direction`, `shadow_direction`), optional
+`constants` (`time_of_day`, `weather`, `palette`), and `allowed_changes`.
+Start each matching `location_map` summary with the same `location_id`, then
+describe the master view, anchors, and light in plain language. The typed
+contract is the source of truth; the summary is for people reading the plan.
+
+Call `validate_scene_plan_continuity` before you generate the location plate
+or character/prop reference sheets. This structural check validates planned
+descriptors, scene IDs, maps, anchors, and light direction; it does not require
+generated reference files.
+Legacy proposals and `source_led` projects skip strict continuity validation.
+
+```python
+from lib.narrative_continuity import validate_scene_plan_continuity
+
+proposal_packet = state.artifacts["proposal"]["proposal_packet"]
+strict_continuity = proposal_packet.get("metadata", {}).get("continuity_contract_version") == "1.0"
+validate_scene_plan_continuity(scene_plan, strict=strict_continuity)
+```
 
 Every shot also needs a stable **shot id** (`shot_id`). The id is the key later stages use for shot specs (`schemas/artifacts/shot_spec.schema.json`), take selection, and edit decisions — a shot without an id cannot be tracked through the assets gate. Use a scene-prefixed form such as `s02-sh03`.
 

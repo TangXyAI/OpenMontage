@@ -9,25 +9,51 @@ does not automatically approve assets or choose takes.
 ## Store and select
 
 All media paths must exist inside the project directory. Each distinct state
-of a character, location or prop should have its own ID. Shot IDs should match
-scene IDs in the scene plan.
+of a character, location or prop should have its own asset ID; state variants
+share an `entity_id`. Keep `shot_id` distinct from `scene_id` and register the
+shot-to-scene relationship explicitly. Strict continuity applies when the
+approved proposal has `metadata.continuity_contract_version: "1.0"`.
 
 ```python
 from lib.narrative_assets import NarrativeAssets
 
 catalog = NarrativeAssets("projects/my-film")
 catalog.put_asset("hero-wet", "character", "Hero in raincoat, wet",
-                  "assets/images/hero-wet.png", state="wet",
+                  "assets/images/hero-wet.png", state="wet", entity_id="hero",
                   metadata={"source_tool": "comfyui_image"})
-catalog.link_assets("shot-01", ["hero-wet"])
-catalog.add_take("shot-01", "take-01", "assets/video/shot-01-take-01.mp4",
+catalog.put_asset("loc-workshop-master", "location", "Empty workshop master plate",
+                  "assets/references/locations/workshop.png", state="master_plate",
+                  entity_id="loc-workshop")
+catalog.register_shot("s01-sh01", "s01", continuity_contract_version="1.0")
+catalog.link_assets("s01-sh01", ["hero-wet", "loc-workshop-master"])
+catalog.add_take("s01-sh01", "take-01", "assets/video/s01-sh01-take-01.mp4",
                  5.0, {"source_tool": "comfyui_video", "seed": 42,
                        "prompt": "...", "model": "MiniMax-H3",
                        "workflow_provenance": {"workflow_hash_sha256": "..."}})
-catalog.select_take("shot-01", "take-01")  # after user review
+catalog.record_continuity_review("s01-sh01", "take-01", {
+    "dimensions": {
+        "identity_wardrobe": "pass", "location_anchors": "pass",
+        "camera_continuity": "pass", "light_and_look": "pass", "story_state": "pass",
+    },
+    "notes": {
+        "identity_wardrobe": "Identity and coat match.", "location_anchors": "Bench and doorway match.",
+        "camera_continuity": "Screen direction and gaze match.", "light_and_look": "Window key stays camera-left.",
+        "story_state": "The key remains in the right hand.",
+    },
+    "evidence_paths": ["assets/reviews/s01-sh01-frame.png"],
+})  # after reviewing the candidate frames
+catalog.select_take("s01-sh01", "take-01")  # after user review
 manifest = catalog.asset_manifest()
-edit = catalog.edit_decisions(["shot-01"], "ffmpeg")  # use the approved runtime
+edit = catalog.edit_decisions(["s01-sh01"], "ffmpeg")  # use the approved runtime
 ```
+
+For strict shots, call `register_shot` with the scene ID and version, then use
+`record_continuity_review(shot_id, take_id, review)` for each reviewed candidate.
+The review records all five dimensions, short notes, and project-relative frame
+evidence. `drift` or `unclear` can be recorded for a rejected candidate; an
+override reason is required to select that take.
+The manifest exports `scene_id` separately from `shot_id`; an enhancement that
+changes the selected media path requires a fresh review of the enhanced file.
 
 Each mutation persists immediately. `asset_manifest()` exports the selected
 takes and scene-linked reference images in the existing asset manifest schema;

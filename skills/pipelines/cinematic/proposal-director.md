@@ -10,6 +10,22 @@ For a source-footage treatment record `source_led` and retain source priority.
 Check the actual provider, local workflow, model and runtime readiness before
 claiming the treatment is available; do not silently substitute stills or APIs.
 
+## Narrative Continuity Contract
+
+For a new cinematic proposal whose production mode is `narrative_generated`,
+include `proposal_packet.metadata.continuity_contract_version: "1.0"` and state
+in the proposal that scene and shot inputs will be checked before video-shot
+generation and selected takes will carry a continuity review. `source_led`
+proposals do not set this marker.
+
+When revising an existing approved project whose proposal has no continuity
+marker, keep it in legacy mode by default. If the user opts in, explain the
+additional scene/shot fields and review evidence, set the version marker, and
+append a `decision_log` entry under `category: "approval_policy"` with the
+exact subject `Scene continuity contract version`. Record both `legacy` and
+`strict_v1` in `options_considered` and the user's approval. The opt-in applies
+to newly planned/generated shots; do not invalidate already approved shots.
+
 **This is the approval gate.** Nothing downstream runs until the user says "go."
 
 ## Runtime Selection (required field — `render_runtime`)
