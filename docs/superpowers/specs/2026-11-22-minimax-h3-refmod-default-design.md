@@ -7,7 +7,7 @@
 
 ## Intent
 
-When an approved cinematic asset set contains reusable characters, clothing states, locations, or important props, prepare MiniMax H3 RefMods from those approved references and apply the relevant Mods during local H3 shot generation. The system should retain ordinary Ref2VA inputs for first/last frames, motion references, and other one-off references.
+When an approved cinematic asset set contains reusable characters, clothing states, locations, or important props, prepare MiniMax H3 RefMods from those approved references and apply the relevant Mods during local H3 Ref2VA shot generation. Keep exact first/last-frame shots on the native FL2VA path, and keep one-off motion/video references as ordinary Ref2VA inputs.
 
 The user chose:
 
@@ -19,6 +19,7 @@ The user chose:
 - OpenMontage's local H3 workflows use native `MiniMaxH3ReferenceToVideo` inputs such as `ref_image_0` and `ref_image_1`; the cinematic asset director does not prepare or apply RefMods.
 - The ComfyUI installation has `ComfyUI-MiniMaxH3Mod`, RefMod extraction/application nodes, and an existing file under `models/refmods`. User-owned H3 RefMod workflows also exist in the shared workflows directory.
 - RefMod extraction is a community ComfyUI extension step. It encodes selected references into a reusable `.safetensors` conditioning asset; a loader/apply stage injects that conditioning into H3 Ref2VA.
+- MiniMax H3 exposes separate FL2VA and Ref2VA task families. The installed RefMod Apply node requires a Ref2VA checkpoint/workflow; it cannot be combined with exact FL2VA first/last-frame conditioning.
 - The current RefMod node catalog is stale: the catalog lookup reports port 8188 while the running ComfyUI status reports port 8290. Validate against the actual selected server before accepting a RefMod workflow as ready.
 - The cinematic assets pipeline already gates asset sheets and model selection before batch takes. This design reuses those gates.
 
@@ -27,7 +28,7 @@ The user chose:
 - Default local MiniMax H3 shot generation to project-specific RefMods for reusable approved assets.
 - Store a traceable association between each Mod, its approved source assets, entity ID, and state variant.
 - Apply only the Mods relevant to the current shot and keep prompt labels aligned with the H3 reference order.
-- Reuse the native Ref2VA path for first/last frames and one-off motion or video references.
+- Keep exact first/last-frame shots on native FL2VA and one-off motion/video references on native Ref2VA.
 - Preserve provider, model-family, and render-route approval decisions.
 - Leave hosted MiniMax H3 and non-H3 providers unchanged.
 
@@ -59,15 +60,16 @@ The user selected approach 1 because they want project-specific automatic extrac
 4. Store the canonical `.safetensors` file under `projects/<project_id>/assets/refmods/`. Place or mirror a loader-visible copy under `models/refmods/openmontage/<project_id>/`; treat that copy as a rebuildable runtime cache. Never overwrite another project's Mod or the existing `测试人001` file.
 5. Record a `metadata.refmod_assets` map in the asset manifest, keyed by source `asset_id`. Each entry records the project path, loader name, entity ID, state, concept type, source asset IDs/paths, source hashes, RefMod file hash, and extractor/model provenance.
 6. For each H3 shot, pass only the Mods for the shot's referenced reusable assets. The workflow applies them to Ref2VA conditioning. The prompt compiler emits subject labels in the same deterministic order as the loaded visual Mods.
-7. Keep first/last frames and one-off video/motion references on the ordinary Ref2VA input path. When a shot combines a RefMod with a native reference, the compiler owns one unified ordering so `<Subject N>` / `<Picture N>` labels cannot drift.
+7. Apply RefMods only to H3 Ref2VA workflows. Keep exact first/last-frame shots on native FL2VA, and keep one-off motion/video references as ordinary Ref2VA inputs. When a shot combines a RefMod with a native Ref2VA reference, the compiler owns one unified ordering so `<Subject N>` / `<Picture N>` labels cannot drift.
 8. Existing projects stay unchanged until their user explicitly regenerates or opts in newly planned shots. Non-local H3 routes remain on their approved native provider path.
 
 ## Gates and Failure Behavior
 
 - RefMod extraction runs only after the source asset sheets are approved.
 - The existing model-selection gate remains authoritative. RefMod does not silently switch a hosted H3 route to local ComfyUI.
+- If a shot requires both project RefMod conditioning and exact first/last-frame FL2VA conditioning, surface the incompatibility and ask which approved behavior to keep; do not silently change the operation.
 - Before the first extraction, validate that the selected ComfyUI server exposes the required H3 and RefMod nodes and models. Do not trust the stale 8188 node cache when the selected server is 8290.
-- If the RefMod pack, H3 VAE/model stack, or live node validation is unavailable, mark the RefMod path blocked and surface the existing native Ref2VA option for explicit user choice. Do not silently fall back after RefMod was selected.
+- If the RefMod pack, H3 VAE/model stack, or live node validation is unavailable, mark the RefMod path blocked and surface the appropriate native H3 path for explicit user choice (FL2VA for exact first/last frames, Ref2VA for ordinary references). Do not silently fall back after RefMod was selected.
 - If an approved source image, asset state, or project mapping changes, regenerate only the affected Mod and update its hash/provenance before the next batch.
 
 ## Artifact and Provenance Contract
@@ -88,7 +90,7 @@ Generated video assets continue to be recorded as the selected H3 takes. RefMod 
 - A local H3 asset run with approved reusable references creates project-scoped RefMods and loads the matching Mods by asset/entity state.
 - Two projects with the same character or asset label cannot overwrite or resolve each other's Mods.
 - A shot receives only the Mods from its approved `references`; prompt labels and loader ordering agree.
-- First/last-frame and motion/video references remain on the native Ref2VA path.
+- Exact first/last-frame shots retain native FL2VA; one-off motion/video references retain native Ref2VA conditioning.
 - Hosted MiniMax H3 and other model routes do not receive local RefMod nodes or trigger a provider switch.
 - An unavailable or stale RefMod setup is surfaced before batch generation and cannot silently degrade to ordinary Ref2VA.
 - The asset manifest records every Mod's source and exact file hashes, and stale source assets invalidate only dependent Mods.
@@ -101,7 +103,8 @@ Generated video assets continue to be recorded as the selected H3 takes. RefMod 
 - **State bleed:** key Mod mapping by source asset/state, and pass only the current shot's state variant.
 - **ComfyUI endpoint mismatch:** refresh and validate the live node schema at the selected server URL before any workflow call.
 - **Third-party node changes:** record node/version and workflow hash in provenance; fail before the batch if the live contract differs.
-- **Over-conditioning one-off motion:** preserve normal Ref2VA references for motion/video and keyframe inputs, and apply Mods only to reusable concepts.
+- **Task-family conflict:** RefMod is limited to Ref2VA; preserve exact keyframes with FL2VA and ask when a shot requires both behaviors.
+- **Over-conditioning one-off motion:** preserve normal Ref2VA references for motion/video and apply Mods only to reusable concepts.
 
 ## Builder-Owned Details
 
