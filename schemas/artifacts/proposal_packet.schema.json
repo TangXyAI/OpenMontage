@@ -330,7 +330,13 @@
       },
       "additionalProperties": false
     },
-    "metadata": { "type": "object" }
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "continuity_contract_version": { "type": "string", "const": "1.0" }
+      },
+      "additionalProperties": true
+    }
   },
   "$defs": {
     "taste_profile": {

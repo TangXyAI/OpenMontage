@@ -64,7 +64,59 @@
           "character_acting": { "type": "string", "description": "Objective, obstacle, and performance notes" },
           "style": { "type": "string", "description": "Look and rendering style" },
           "quality": { "type": "string", "description": "Acceptance bar for the shot" },
-          "constraints": { "type": "string", "description": "Hard limits and forbidden elements" }
+          "constraints": { "type": "string", "description": "Hard limits and forbidden elements" },
+          "continuity": {
+            "type": "object",
+            "description": "Versioned continuity contract for strict narrative-generated shots",
+            "required": [
+              "contract_version",
+              "location_id",
+              "previous_shot_id",
+              "entities",
+              "carried_states",
+              "intentional_changes",
+              "screen_direction",
+              "gaze_targets",
+              "hand_prop_states"
+            ],
+            "properties": {
+              "contract_version": { "type": "string", "const": "1.0" },
+              "location_id": { "type": "string", "minLength": 1 },
+              "previous_shot_id": { "type": ["string", "null"] },
+              "entities": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["entity_id", "asset_id", "state"],
+                  "properties": {
+                    "entity_id": { "type": "string", "minLength": 1 },
+                    "asset_id": { "type": "string", "minLength": 1 },
+                    "state": { "type": "string", "minLength": 1 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "carried_states": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+              "intentional_changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["entity_id", "from_state", "to_state", "reason"],
+                  "properties": {
+                    "entity_id": { "type": "string", "minLength": 1 },
+                    "from_state": { "type": "string", "minLength": 1 },
+                    "to_state": { "type": "string", "minLength": 1 },
+                    "reason": { "type": "string", "minLength": 1 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "screen_direction": { "type": "string" },
+              "gaze_targets": { "type": "array", "items": { "type": "string" } },
+              "hand_prop_states": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          }
         },
         "additionalProperties": false
       }
