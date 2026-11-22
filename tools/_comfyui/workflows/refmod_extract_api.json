@@ -1,0 +1,46 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "approved_reference.png"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "MiniMaxH3RefModExtract",
+    "inputs": {
+      "name": "my_concept",
+      "mode": "Compressed Reference",
+      "concept_type": "generic",
+      "refs_image.ref_image_0": [
+        "1",
+        0
+      ],
+      "background_retention": 0.0,
+      "vae": [
+        "3",
+        0
+      ],
+      "ref_resolution": 1024,
+      "pool_h": 16,
+      "pool_w": 16,
+      "latent_frames": 16,
+      "identity": 500,
+      "merge": false,
+      "motion_only": false,
+      "multiplier": 1,
+      "max_tokens": 5120,
+      "extraction_preset": "manual",
+      "subfolder": "",
+      "description": "",
+      "save": true,
+      "budget_policy": "truncate",
+      "image_refs": "stack"
+    }
+  }
+}

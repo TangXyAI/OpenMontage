@@ -115,16 +115,18 @@ git commit -m "feat: persist project MiniMax H3 RefMods"
 
 **Interfaces:**
 - Register `ComfyUIRefMod` as a `BaseTool` named `comfyui_refmod`, provider `comfyui`, capability `asset_conditioning`, runtime `LOCAL_GPU`.
-- Its `extract` operation accepts `project_id`, `project_dir`, `comfyui_workspace`, `server_url`, `asset_id`, `reference_path`, `concept_type`, and `description`; it returns `project_path`, `loader_name`, source/Mod hashes, extraction metadata, and the ComfyUI prompt ID.
+- Its `extract` operation accepts `project_id`, `project_dir`, `comfyui_workspace`, `server_url`, `asset_id`, the catalog's `reference_path`, the approved H3 `video_vae_name`, and `concept_type`; it verifies that `reference_path` is exactly the approved catalog path and returns `project_path`, `loader_name`, source/Mod hashes, extraction metadata, and the ComfyUI prompt ID.
+- Set `idempotency_key_fields` to include `project_id`, `asset_id`, `reference_path`, `concept_type`, `video_vae_name`, and `server_url`. The file-valued `reference_path` must be content-fingerprinted so source edits cannot reuse a cached Mod.
 - Use a deterministic name under `openmontage/<project_id>/` that includes a source hash. Reuse an existing Mod only when source and Mod hashes both match.
 - Default extraction mode to the live node's `Compressed Reference` preset. Map `character` to `identity`, `location` to `background`, and `prop` to `generic`; preserve an explicit `clothing` or `style` override.
-- Validate that the ComfyUI target is local/shared-storage, the approved source is inside the project, and the live `object_info` exposes `MiniMaxH3RefModExtract` and the required H3 VAE. Run the bundled API workflow, copy the saved Mod into the project asset path, and register it through `NarrativeAssets.register_refmod_asset`.
+- Record the RefMod node-pack version and selected H3 video VAE in `extractor.model_stack`; include both in the deterministic loader-name signature so a node/VAE update cannot reuse an incompatible Mod.
+- Validate that the ComfyUI target is local/shared-storage, the approved source is inside the project, and the live `object_info` exposes `MiniMaxH3RefModExtract` and the selected H3 VAE. Bind `video_vae_name` into the bundled API workflow, copy the saved Mod into the project asset path, and register it through `NarrativeAssets.register_refmod_asset`.
 
 - [ ] **Step 1: Write failing extraction tests** with these names and assertions:
 
 ```python
 def test_refmod_extract_writes_project_asset_and_loader_copy(tmp_path, fake_comfy):
-    assert result.data["project_path"].startswith("assets/refmods/")
+    assert Path(result.data["project_path"]).as_posix().startswith("assets/refmods/")
     assert result.data["loader_name"].startswith("openmontage/project-a/")
     assert sha256_file(project_path) == result.data["refmod_sha256"]
 
@@ -160,7 +162,7 @@ Expected: PASS; failed server/node checks return a clear blocked result without 
 - [ ] **Step 5: Commit the extraction tool.**
 
 ```powershell
-git add tools/video/comfyui_refmod.py tools/_comfyui/workflows/refmod_extract_api.json tests/contracts/test_comfyui_refmod.py tests/lib/test_comfyui_refmod_paths.py
+git add docs/superpowers/plans/2026-11-22-minimax-h3-refmod-default.md tools/video/comfyui_refmod.py tools/_comfyui/workflows/refmod_extract_api.json tests/contracts/test_comfyui_refmod.py tests/lib/test_comfyui_refmod_paths.py
 git diff --cached --check
 git commit -m "feat: extract project-scoped MiniMax H3 RefMods"
 ```
@@ -176,6 +178,7 @@ git commit -m "feat: extract project-scoped MiniMax H3 RefMods"
 
 **Interfaces:**
 - Add optional `refmod_assets: list[dict[str, str]]` to local H3 execution. Each item contains `asset_id`, `loader_name`, `concept_type`, `state`, `description`, and `prompt_label`.
+- Add optional `server_url: str` to `ComfyUIVideo.execute`. When present, construct a per-call `ComfyUIClient(server_url=server_url, capability="video")` and pass it to graph binding/upload/submission; do not mutate process-wide environment or shared client state.
 - Add `build_refmod_workflow(workflow: dict[str, Any], refs: list[dict[str, str]], operation: str) -> tuple[dict[str, Any], list[str]]` in `tools/_comfyui/refmod_workflow.py`. It binds existing RefMod loader/apply nodes or safely injects them into a validated local H3 Ref2VA graph; it returns the modified API graph plus the exact ordered asset IDs.
 - For `reference_to_video`, non-empty `refmod_assets` satisfy the visual-reference requirement, so zero or more native stills may accompany them. Preserve the existing two-native-image minimum when no RefMods are supplied.
 - Apply Mods only to `reference_to_video` Ref2VA workflows. Exact `first_last_frame_to_video` remains FL2VA; if a shot requests both FL2VA and RefMods, return an explicit incompatibility error before submission.
@@ -209,6 +212,9 @@ def test_fl2va_keyframe_operation_rejects_refmods():
 
 def test_hosted_h3_route_rejects_local_refmods():
     assert "local RefMod" in result.error
+
+def test_comfyui_video_uses_explicit_server_url(tmp_path, monkeypatch):
+    assert submitted_client.server_url == "http://127.0.0.1:8290"
 
 def test_custom_h3_graph_without_ref2va_conditioning_is_blocked():
     assert not result.success
@@ -258,10 +264,13 @@ git commit -m "feat: apply project RefMods to local H3 shots"
 - After approved `asset_sheets` and local H3 `model_selection`, the asset director calls `comfyui_refmod` once per eligible approved asset/state before `Batch takes` and registers each result in `NarrativeAssets`.
 - Eligible assets are approved character, clothing/state, location, or prop records referenced by at least one planned local H3 shot; current shot count does not affect eligibility.
 - For each local H3 shot, pass `NarrativeAssets.refmods_for_shot(shot_id)` into `comfyui_video` and compile `subject_definitions` from the returned descriptors and labels.
+- Before the local batch, read the selected ComfyUI target with the live `server_info` tool when available. Pass the same `server_url` to extraction and H3 generation and `workspace.path` to extraction; if unavailable, use the configured URL only after its `object_info` validates.
 - Add `reference_conditioning_selection` to the decision-log category enum. Record the default `project_refmod` choice against subject `MiniMax H3 reusable-asset conditioning`, with `native_ref2va` retained as the considered option; append a new decision with the same category/subject when the user overrides it.
 - Add `record_reference_conditioning_selection(path: str | Path, project_id: str, stage: str, mode: Literal["project_refmod", "native_ref2va"], options: Sequence[Mapping[str, Any]], reason: str) -> dict[str, Any]` in `lib/video_model_selection.py`. It appends an approved, latest-wins decision with the category/subject above, validates the decision-log schema, and writes atomically.
 - After logging the decision, call `NarrativeAssets.record_refmod_usage` with the returned `decision_id` so the approved asset manifest and decision log show the same conditioning choice.
+- Add optional `server_url: str | None` to `lib.video_model_selection.build_menu(...)`. For H3 local/HyperFlow routes only, use the supplied live server URL to verify the ComfyUI connection; keep other ComfyUI routes' existing readiness checks unchanged.
 - Add `comfyui_refmod` to cinematic asset-stage availability. Keep `asset_sheets`, `model_selection`, and `enhancement_selection` gates unchanged; do not add a provider/model switch.
+- Before local H3 model selection/extraction/generation, call ComfyUI `server_info` when available and pass the same live `server.url` to `build_menu`, `comfyui_refmod`, and `comfyui_video`, plus `workspace.path` to extraction. If the selected server workspace is not shared/accessible, block before the batch.
 - For hosted H3, other providers, or exact FL2VA first/last-frame operations, do not send RefMod bindings. If a local RefMod prerequisite fails, block and offer the compatible native H3 path for explicit user choice.
 
 - [ ] **Step 1: Write failing contract and pilot tests** with these assertions:
@@ -274,6 +283,12 @@ def test_record_reference_conditioning_selection_appends_latest_mode(tmp_path):
     assert decision["category"] == "reference_conditioning_selection"
     assert decision["subject"] == "MiniMax H3 reusable-asset conditioning"
     assert decision["selected"] == "native_ref2va"
+
+def test_video_menu_uses_explicit_server_for_local_h3_only(monkeypatch):
+    menu = build_menu(registry, server_url="http://127.0.0.1:8290")
+    assert route(menu, "h3_local")["available"] is True
+    assert route(menu, "hyperflow_int8")["available"] is True
+    assert route(menu, "wan22")["available"] is False
 
 def test_local_h3_pilot_persists_and_applies_project_refmods(tmp_path):
     assert manifest["metadata"]["refmod_assets"]["hero-wet"]["state"] == "wet"
@@ -291,6 +306,11 @@ def test_hosted_h3_keeps_native_provider_path(tmp_path):
     assert result.data["hosted"] is True
     assert result.data["workflow_provenance"]["source"] == "comfyui_partner_node"
     assert result.data["workflow_provenance"].get("refmod_asset_ids", []) == []
+
+def test_refmod_extraction_and_h3_menu_and_batch_use_the_same_comfy_target(tmp_path):
+    assert extraction.server_url == batch.server_url == "http://127.0.0.1:8290"
+    assert h3_menu.server_url == "http://127.0.0.1:8290"
+    assert extraction.workspace_path == "G:/ComfyUI/Installs/ComfyUI/ComfyUI"
 ```
 
 - [ ] **Step 2: Run the tests and confirm current pipeline instructions do not wire RefMod.**
