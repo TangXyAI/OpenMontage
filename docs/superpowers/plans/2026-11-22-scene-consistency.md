@@ -214,9 +214,13 @@ def test_shot_with_unknown_scene_or_asset_fails_before_generation():
     with pytest.raises(ContinuityValidationError, match="scene_id|asset_id"):
         validate_shot_continuity(scene_plan, shot_with_unknown_scene_or_asset, catalog_data, project_root, strict=True)
 
-def test_reference_missing_or_outside_project_fails_before_generation():
+def test_reference_missing_mismatched_or_outside_project_fails_before_generation():
     with pytest.raises(ContinuityValidationError, match="reference path"):
         validate_shot_continuity(scene_plan, shot_with_invalid_reference_path, catalog_data, project_root, strict=True)
+    mismatched = copy.deepcopy(shot_specs)
+    mismatched["shots"][0]["references"][1]["path"] = catalog_data["assets"]["loc-s01-master"]["path"]
+    with pytest.raises(ContinuityValidationError, match="reference path"):
+        validate_shot_continuity(scene_plan, mismatched, catalog_data, project_root, strict=True)
 
 def test_missing_approved_location_plate_reference_fails():
     with pytest.raises(ContinuityValidationError, match="master plate"):
