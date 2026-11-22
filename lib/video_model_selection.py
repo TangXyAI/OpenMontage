@@ -16,9 +16,10 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import jsonschema
+from tools._comfyui.client import ComfyUIClient
 
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
@@ -29,6 +30,9 @@ SCHEMA_PATH = (
 
 DECISION_CATEGORY = "provider_selection"
 DECISION_SUBJECT = "Video model and route"
+REFERENCE_CONDITIONING_CATEGORY = "reference_conditioning_selection"
+REFERENCE_CONDITIONING_SUBJECT = "MiniMax H3 reusable-asset conditioning"
+_LOCAL_H3_ROUTE_IDS = frozenset({"hyperflow_gguf", "hyperflow_int8", "h3_local"})
 
 _OPERATIONS_TEXT_IMAGE = ("text_to_video", "image_to_video")
 _OPERATIONS_HYPERFLOW = (
@@ -298,6 +302,7 @@ def build_menu(
     *,
     duration: int = 5,
     readiness: Mapping[str, Any] | None = None,
+    server_url: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the live menu by combining the fixed catalog with registry state.
 
@@ -305,16 +310,32 @@ def build_menu(
     :func:`lib.local_video_readiness.check_hyperflow_readiness`. When supplied,
     ``hyperflow_gguf`` and ``hyperflow_int8`` take their availability from the
     matching ``readiness["variants"]`` entry, so a missing quantization is not
-    advertised as available. ``h3_local`` and every cloud route keep reading
-    the tool status, and omitting ``readiness`` restores that behavior for all
-    local routes.
+    advertised as available. ``h3_local`` and HyperFlow routes can use an
+    explicit ComfyUI server URL. Hosted routes keep reading registry status.
     """
     tools = getattr(registry, "_tools", {}) or {}
+    selected_server_available: bool | None = None
+    selected_server_setup: str | None = None
+    if server_url:
+        try:
+            selected_client = ComfyUIClient(
+                server_url=server_url, capability="video"
+            )
+            selected_server_available = selected_client.is_available()
+            if not selected_server_available:
+                selected_server_setup = selected_client.unavailable_reason()
+        except Exception as exc:
+            selected_server_available = False
+            selected_server_setup = f"Could not inspect ComfyUI server {server_url}: {exc}"
+
     menu: list[dict[str, Any]] = []
     for route in default_routes():
         tool = tools.get(route.tool)
         status = _tool_status(tool)
         tool_available = status == "available"
+        if server_url and route.route_id in _LOCAL_H3_ROUTE_IDS:
+            tool_available = bool(selected_server_available and tool is not None)
+            status = "available" if tool_available else "unavailable"
         available = tool_available
         variant = _LOCAL_VARIANT_ROUTES.get(route.route_id)
         variant_state = _variant_readiness(readiness, variant) if variant else None
@@ -331,14 +352,24 @@ def build_menu(
             if not variant_state.get("ready"):
                 setup_parts.append(_variant_setup(variant_state))
             if not tool_available:
-                tool_hint = _tool_setup(tool) or (
+                tool_hint = selected_server_setup if server_url else None
+                tool_hint = tool_hint or _tool_setup(tool) or (
                     "ComfyUI video tool is not registered; run registry.discover()"
                 )
                 if tool_hint not in setup_parts:
                     setup_parts.append(tool_hint)
             setup = "; ".join(setup_parts) or None
         else:
-            setup = None if available else _tool_setup(tool)
+            if available:
+                setup = None
+            elif server_url and route.route_id in _LOCAL_H3_ROUTE_IDS:
+                setup = (
+                    selected_server_setup
+                    or _tool_setup(tool)
+                    or f"ComfyUI video tool is not registered for {server_url}"
+                )
+            else:
+                setup = _tool_setup(tool)
         menu.append(
             {
                 "route_id": route.route_id,
@@ -486,5 +517,98 @@ def record_selection(
         schema = json.load(handle)
     jsonschema.validate(log, schema)
 
+    _atomic_write(log_path, log)
+    return decision
+
+
+def record_reference_conditioning_selection(
+    path: str | Path,
+    project_id: str,
+    stage: str,
+    mode: Literal["project_refmod", "native_ref2va"],
+    options: Sequence[Mapping[str, Any]],
+    reason: str,
+) -> dict[str, Any]:
+    """Append an approved local H3 conditioning decision atomically."""
+    if mode not in {"project_refmod", "native_ref2va"}:
+        raise ValueError(f"Unsupported H3 reference-conditioning mode: {mode}")
+    log_path = Path(path)
+    options_considered = [dict(option) for option in options]
+    selected_option = next(
+        (item for item in options_considered if item.get("option_id") == mode),
+        None,
+    )
+    if selected_option is None:
+        raise ValueError(
+            f"Selected conditioning mode '{mode}' is not among options_considered"
+        )
+    selected_option.pop("rejected_because", None)
+
+    if log_path.exists():
+        with open(log_path, encoding="utf-8") as handle:
+            log = json.load(handle)
+        if log.get("project_id") != project_id:
+            raise ValueError("Decision log project_id does not match the requested project")
+    else:
+        log = {"version": "1.0", "project_id": project_id, "decisions": []}
+
+    decisions = log.setdefault("decisions", [])
+    previous = next(
+        (
+            item
+            for item in reversed(decisions)
+            if item.get("category") == REFERENCE_CONDITIONING_CATEGORY
+            and item.get("subject") == REFERENCE_CONDITIONING_SUBJECT
+        ),
+        None,
+    )
+    if isinstance(previous, Mapping) and previous.get("selected") != mode:
+        previous_id = previous.get("selected")
+        previous_option = next(
+            (
+                dict(item)
+                for item in previous.get("options_considered", [])
+                if isinstance(item, Mapping) and item.get("option_id") == previous_id
+            ),
+            None,
+        )
+        previous_option = previous_option or {
+            "option_id": previous_id,
+            "label": str(previous_id),
+            "score": 0.0,
+            "reason": "This option was selected in the previous conditioning decision.",
+        }
+        previous_option["rejected_because"] = (
+            f"User changed the previous conditioning choice to '{mode}'."
+        )
+        current_previous = next(
+            (
+                item
+                for item in options_considered
+                if item.get("option_id") == previous_id
+            ),
+            None,
+        )
+        if current_previous is None:
+            options_considered.append(previous_option)
+        else:
+            current_previous["rejected_because"] = previous_option["rejected_because"]
+
+    decision = {
+        "decision_id": _next_decision_id(decisions),
+        "stage": stage,
+        "category": REFERENCE_CONDITIONING_CATEGORY,
+        "subject": REFERENCE_CONDITIONING_SUBJECT,
+        "options_considered": options_considered,
+        "selected": mode,
+        "reason": reason,
+        "user_visible": True,
+        "user_approved": True,
+    }
+    decisions.append(decision)
+
+    with open(SCHEMA_PATH, encoding="utf-8") as handle:
+        schema = json.load(handle)
+    jsonschema.validate(log, schema)
     _atomic_write(log_path, log)
     return decision

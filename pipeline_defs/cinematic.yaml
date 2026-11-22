@@ -191,6 +191,7 @@ stages:
       - freesound_music
       - music_gen
       - comfyui_enhance
+      - comfyui_refmod
     tools_available:
       - subtitle_gen
       - audio_enhance
@@ -205,6 +206,7 @@ stages:
       - freesound_music
       - music_gen
       - comfyui_enhance
+      - comfyui_refmod
     checkpoint_required: true
     human_approval_default: true
     review_focus:

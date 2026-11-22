@@ -330,7 +330,7 @@ def test_refmods_for_shot_returns_only_current_linked_mods_in_stable_order(tmp_p
     assert [item["description"] for item in refs] == ["Courier in a soaked coat", "Empty workshop"]
 
 
-def test_refmods_for_shot_skips_mod_when_source_hash_changes(tmp_path):
+def test_refmods_for_shot_blocks_when_source_hash_changes(tmp_path):
     catalog = _refmod_catalog(tmp_path)
     _register_refmod(
         catalog, "hero-wet", "assets/refmods/hero-wet.safetensors",
@@ -338,7 +338,8 @@ def test_refmods_for_shot_skips_mod_when_source_hash_changes(tmp_path):
     )
     (tmp_path / "assets/images/hero-wet.png").write_bytes(b"updated approved sheet")
 
-    assert catalog.refmods_for_shot("s01-sh01") == []
+    with pytest.raises(ValueError, match="stale RefMod"):
+        catalog.refmods_for_shot("s01-sh01")
     assert catalog.asset_manifest()["metadata"]["refmod_assets"]["hero-wet"]["status"] == "stale"
 
 

@@ -150,6 +150,29 @@ def test_menu_marks_gguf_available_when_its_variant_is_ready():
     assert "int8" in int8["setup"].lower()
 
 
+def test_video_menu_uses_explicit_server_for_local_h3_only(monkeypatch):
+    import lib.video_model_selection as module
+
+    seen = []
+
+    class SelectedServer:
+        def __init__(self, server_url=None, capability=None):
+            seen.append((server_url, capability))
+
+        def is_available(self):
+            return True
+
+    monkeypatch.setattr(module, "ComfyUIClient", SelectedServer, raising=False)
+
+    menu = build_menu(FakeRegistry("unavailable"), server_url="http://127.0.0.1:8290")
+    routes = {item["route_id"]: item for item in menu}
+
+    assert routes["h3_local"]["available"] is True
+    assert routes["hyperflow_int8"]["available"] is True
+    assert routes["comfyui_h3_api"]["available"] is False
+    assert seen == [("http://127.0.0.1:8290", "video")]
+
+
 def test_require_selected_route_raises_without_approval():
     with pytest.raises(ValueError, match="No user-approved"):
         require_selected_route({"decisions": []}, "hyperflow_gguf")

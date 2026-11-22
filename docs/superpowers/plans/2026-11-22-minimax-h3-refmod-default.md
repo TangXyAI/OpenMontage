@@ -252,11 +252,14 @@ git commit -m "feat: apply project RefMods to local H3 shots"
 - Modify: `.agents/skills/minimax-h3/SKILL.md`
 - Modify: `docs/narrative-production.md`
 - Modify: `lib/video_model_selection.py`
+- Modify: `lib/narrative_assets.py`
+- Modify: `tools/video/comfyui_video.py`
 - Modify: `schemas/artifacts/decision_log.schema.json`
 - Test: `tests/contracts/test_narrative_cinematic.py`
 - Create: `tests/contracts/test_narrative_refmod_decisions.py`
 - Test: `tests/contracts/test_hell_grind_integration.py`
 - Modify: `tests/lib/test_video_model_selection.py`
+- Modify: `tests/lib/test_narrative_assets.py`
 - Create: `tests/contracts/test_narrative_refmod_workflow.py`
 - Modify: `tests/contracts/test_narrative_workflow.py`
 
@@ -264,6 +267,8 @@ git commit -m "feat: apply project RefMods to local H3 shots"
 - After approved `asset_sheets` and local H3 `model_selection`, the asset director calls `comfyui_refmod` once per eligible approved asset/state before `Batch takes` and registers each result in `NarrativeAssets`.
 - Eligible assets are approved character, clothing/state, location, or prop records referenced by at least one planned local H3 shot; current shot count does not affect eligibility.
 - For each local H3 shot, pass `NarrativeAssets.refmods_for_shot(shot_id)` into `comfyui_video` and compile `subject_definitions` from the returned descriptors and labels.
+- When `refmods_for_shot` finds a linked RefMod whose source or Mod hash is stale, it raises a clear blocker rather than returning a partial list that could silently use native references.
+- Record both the ordered `refmod_asset_ids` and the full per-asset mapping/hashes in local H3 `workflow_provenance`.
 - Before the local batch, read the selected ComfyUI target with the live `server_info` tool when available. Pass the same `server_url` to extraction and H3 generation and `workspace.path` to extraction; if unavailable, use the configured URL only after its `object_info` validates.
 - Add `reference_conditioning_selection` to the decision-log category enum. Record the default `project_refmod` choice against subject `MiniMax H3 reusable-asset conditioning`, with `native_ref2va` retained as the considered option; append a new decision with the same category/subject when the user overrides it.
 - Add `record_reference_conditioning_selection(path: str | Path, project_id: str, stage: str, mode: Literal["project_refmod", "native_ref2va"], options: Sequence[Mapping[str, Any]], reason: str) -> dict[str, Any]` in `lib/video_model_selection.py`. It appends an approved, latest-wins decision with the category/subject above, validates the decision-log schema, and writes atomically.
@@ -288,7 +293,7 @@ def test_video_menu_uses_explicit_server_for_local_h3_only(monkeypatch):
     menu = build_menu(registry, server_url="http://127.0.0.1:8290")
     assert route(menu, "h3_local")["available"] is True
     assert route(menu, "hyperflow_int8")["available"] is True
-    assert route(menu, "wan22")["available"] is False
+    assert route(menu, "comfyui_h3_api")["available"] is False
 
 def test_local_h3_pilot_persists_and_applies_project_refmods(tmp_path):
     assert manifest["metadata"]["refmod_assets"]["hero-wet"]["state"] == "wet"

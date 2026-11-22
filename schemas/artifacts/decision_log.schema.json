@@ -42,7 +42,8 @@
               "playbook_override",
               "visual_accuracy_check",
               "approval_policy",
-              "enhancement_selection"
+              "enhancement_selection",
+              "reference_conditioning_selection"
             ],
             "description": "What class of decision this is"
           },

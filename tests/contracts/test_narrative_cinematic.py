@@ -63,3 +63,26 @@ def test_cinematic_manifest_requires_review_evidence_only_for_strict_narrative_m
     manifest = load_pipeline("cinematic")
     assets = next(stage for stage in manifest["stages"] if stage["name"] == "assets")
     assert any("strict narrative" in item.lower() and "continuity review" in item.lower() for item in assets["review_focus"])
+
+
+def test_refmod_is_available_after_existing_narrative_approval_gates():
+    manifest = load_pipeline("cinematic")
+    assets = next(stage for stage in manifest["stages"] if stage["name"] == "assets")
+    sub_stages = {stage["name"]: stage for stage in assets["sub_stages"]}
+    assert sub_stages["asset_sheets"]["human_approval_default"] is True
+    assert sub_stages["model_selection"]["human_approval_default"] is True
+    assert "comfyui_refmod" in assets["tools_available"]
+
+    asset_director = (
+        Path(__file__).resolve().parents[2]
+        / "skills/pipelines/cinematic/asset-director.md"
+    ).read_text(encoding="utf-8")
+    narrative_section = asset_director[
+        asset_director.index("## Narrative Asset Pipeline") :
+    ]
+    batch_step = narrative_section.index("9. **Batch takes.**")
+    assert narrative_section.index("asset_sheets") < narrative_section.index(
+        "model_selection"
+    ) < narrative_section.index("comfyui_refmod") < batch_step
+    assert "first_last_frame_to_video" in narrative_section
+    assert "native_ref2va" in narrative_section

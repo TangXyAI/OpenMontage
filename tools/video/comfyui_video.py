@@ -770,6 +770,7 @@ class ComfyUIVideo(BaseTool):
                     hyperflow_meta["refmod_assets"] = self._refmod_provenance(
                         refmod_assets, ordered_asset_ids
                     )
+                    hyperflow_meta["refmod_asset_ids"] = ordered_asset_ids
                     hyperflow_meta["refmod_workflow"] = "MiniMaxH3RefModApply"
                 output_node = str(inputs["output_node"])
             elif model_family in partner_nodes:
@@ -1064,6 +1065,7 @@ class ComfyUIVideo(BaseTool):
         }
 
         refmod_provenance: list[dict[str, Any]] = []
+        refmod_asset_ids: list[str] = []
         if operation == "image_to_video":
             reference = inputs.get("reference_image_path") or inputs.get("first_frame_image_path")
             if not reference:
@@ -1111,6 +1113,7 @@ class ComfyUIVideo(BaseTool):
                 workflow, ordered_asset_ids = build_refmod_workflow(
                     workflow, refmod_assets, operation
                 )
+                refmod_asset_ids = ordered_asset_ids
                 refmod_provenance = self._refmod_provenance(
                     refmod_assets, ordered_asset_ids
                 )
@@ -1127,6 +1130,7 @@ class ComfyUIVideo(BaseTool):
         }
         if refmod_provenance:
             metadata["refmod_assets"] = refmod_provenance
+            metadata["refmod_asset_ids"] = refmod_asset_ids
             metadata["refmod_workflow"] = "MiniMaxH3RefModApply"
         return workflow, _HYPERFLOW_OUTPUT_NODE, metadata
 

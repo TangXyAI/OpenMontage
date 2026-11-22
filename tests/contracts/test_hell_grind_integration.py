@@ -51,3 +51,34 @@ def test_edit_and_compose_cover_post_work():
         text = (PIPELINE / name).read_text(encoding="utf-8").lower()
         for phrase in ("cleanup", "color", "sound"):
             assert phrase in text
+
+
+def test_refmod_stage_uses_server_info_and_shared_workspace_contract():
+    manifest = load_pipeline("cinematic")
+    assets = next(stage for stage in manifest["stages"] if stage["name"] == "assets")
+    assert "comfyui_refmod" in assets["tools_available"]
+
+    asset_text = (PIPELINE / "asset-director.md").read_text(encoding="utf-8")
+    for phrase in (
+        "server_info",
+        "workspace.path",
+        "server_url",
+        "same selected `server_url`",
+        "stale RefMod",
+    ):
+        assert phrase in asset_text
+
+
+def test_h3_skill_and_narrative_guide_preserve_refmod_route_boundaries():
+    root = Path(__file__).resolve().parents[2]
+    h3_skill = (root / ".agents/skills/minimax-h3/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    narrative_guide = (root / "docs/narrative-production.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Project-scoped RefMods" in h3_skill
+    assert "first_last_frame_to_video" in h3_skill
+    assert "reference_conditioning_selection" in narrative_guide
+    assert "stale source or Mod blocks" in narrative_guide

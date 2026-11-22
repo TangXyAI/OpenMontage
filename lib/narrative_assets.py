@@ -241,15 +241,26 @@ class NarrativeAssets:
             raise ValueError(f"Unknown shot: {shot_id}")
         refmod_assets = self.data.get("refmod_assets", {})
         records = []
+        stale_asset_ids = []
         for asset_id in sorted(set(shot.get("asset_ids", []))):
             record = refmod_assets.get(asset_id)
-            if isinstance(record, Mapping) and self._refmod_is_current(asset_id, record):
+            if not isinstance(record, Mapping):
+                continue
+            if not self._refmod_is_current(asset_id, record):
+                stale_asset_ids.append(asset_id)
+                continue
+            if isinstance(record, Mapping):
                 asset = self.data["assets"][asset_id]
                 records.append({
                     "asset_id": asset_id,
                     "description": asset.get("description", ""),
                     **record,
                 })
+        if stale_asset_ids:
+            raise ValueError(
+                "stale RefMod for linked approved assets in shot "
+                f"{shot_id}: {', '.join(stale_asset_ids)}; re-extract before batching"
+            )
         return [
             {**record, "prompt_label": f"<Subject {index}>"}
             for index, record in enumerate(records, start=1)

@@ -282,6 +282,7 @@ def test_hyperflow_ref2v_binds_two_reference_images():
     assert result.success, result.error
     assert captured["20"]["inputs"]["image"] == "remote-hero.png"
     assert captured["21"]["inputs"]["image"] == "remote-place.png"
+    assert result.data["workflow_provenance"].get("refmod_asset_ids", []) == []
 
 
 def test_hyperflow_official_int8_switches_to_official_loader():

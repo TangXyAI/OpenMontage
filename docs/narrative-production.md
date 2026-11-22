@@ -97,3 +97,23 @@ provenance is explicitly unknown. Provider availability alone does not confirm
 that a particular H3 workflow or model stack is ready. Test a reference image,
 an H3 shot and a composition on the target machine before claiming real-model
 end-to-end support.
+
+## Local H3 RefMods
+
+After the approved narrative asset sheets and local H3 route are locked, the
+Cinematic asset stage defaults to project-scoped RefMods for reusable
+characters and states, locations, and props. The `comfyui_refmod` tool extracts
+from the approved source file, keeps a canonical Mod under
+`projects/<project-id>/assets/refmods/`, and registers a loader copy and source
+hash in the narrative asset catalog. Each shot receives only the current Mods
+for its linked assets; prompt labels and loader order come from the same
+`refmods_for_shot` result.
+
+The decision log records `reference_conditioning_selection` with subject
+`MiniMax H3 reusable-asset conditioning`; the approved asset manifest records
+the same decision id and whether the project chose `project_refmod` or
+`native_ref2va`. A stale source or Mod blocks the local batch until it is
+re-extracted. RefMods are local H3 Ref2VA conditioning only: hosted H3 routes
+keep their native provider references, one-off motion references remain native,
+and exact FL2VA first/last frames never receive RefMod bindings. A shot that
+requires both RefMods and exact FL2VA frames needs an explicit user choice.
