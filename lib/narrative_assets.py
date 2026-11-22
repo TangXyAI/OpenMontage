@@ -9,7 +9,7 @@ import json
 import hashlib
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -78,12 +78,39 @@ class NarrativeAssets:
             os.close(descriptor)
             lock.unlink()
 
-    def put_asset(self, asset_id: str, kind: str, description: str, path: str, *, state: str = "default", metadata: dict | None = None) -> None:
+    def put_asset(self, asset_id: str, kind: str, description: str, path: str, *, state: str = "default", metadata: dict | None = None, entity_id: str | None = None) -> None:
         if not asset_id or kind not in {"character", "location", "prop"}:
             raise ValueError("Asset needs an id and kind character, location, or prop")
+        if entity_id is not None and not entity_id.strip():
+            raise ValueError("Asset entity id cannot be empty")
         if asset_id in self.data["assets"]:
             raise ValueError(f"Asset already exists: {asset_id}")
-        self.data["assets"][asset_id] = {"kind": kind, "description": description, "path": self._media(path), "state": state, "metadata": metadata or {}}
+        self.data["assets"][asset_id] = {
+            "kind": kind,
+            "entity_id": entity_id if entity_id is not None else asset_id,
+            "description": description,
+            "path": self._media(path),
+            "state": state,
+            "metadata": metadata or {},
+        }
+        self._save()
+
+    def register_shot(self, shot_id: str, scene_id: str, *, continuity_contract_version: str | None = None) -> None:
+        if not shot_id or not scene_id:
+            raise ValueError("Shot registration needs shot and scene ids")
+        if continuity_contract_version not in {None, "1.0"}:
+            raise ValueError(f"Unsupported continuity contract version: {continuity_contract_version}")
+        shot = self.data["shots"].setdefault(shot_id, {"takes": {}, "selected": None})
+        existing_scene_id = shot.get("scene_id")
+        if existing_scene_id is not None and existing_scene_id != scene_id:
+            raise ValueError(f"Shot {shot_id} is already registered to scene {existing_scene_id}")
+        existing_version = shot.get("continuity_contract_version")
+        if (continuity_contract_version is not None and existing_version is not None
+                and existing_version != continuity_contract_version):
+            raise ValueError(f"Shot {shot_id} already uses continuity contract {existing_version}")
+        shot["scene_id"] = scene_id
+        if continuity_contract_version is not None:
+            shot["continuity_contract_version"] = continuity_contract_version
         self._save()
 
     def add_take(self, shot_id: str, take_id: str, path: str, duration_seconds: float, metadata: dict | None = None) -> None:
@@ -105,24 +132,106 @@ class NarrativeAssets:
         shot["asset_ids"] = list(dict.fromkeys(asset_ids))
         self._save()
 
+    def record_continuity_review(self, shot_id: str, take_id: str, review: Mapping[str, Any]) -> None:
+        shot = self.data["shots"].get(shot_id)
+        if not shot or take_id not in shot.get("takes", {}):
+            raise ValueError(f"Unknown shot or take: {shot_id}/{take_id}")
+        if not isinstance(review, Mapping):
+            raise ValueError("Continuity review must be a mapping")
+
+        expected_dimensions = (
+            "identity_wardrobe",
+            "location_anchors",
+            "camera_continuity",
+            "light_and_look",
+            "story_state",
+        )
+        dimensions = review.get("dimensions")
+        if not isinstance(dimensions, Mapping):
+            raise ValueError("Continuity review dimensions are required")
+        missing = [name for name in expected_dimensions if name not in dimensions]
+        if missing:
+            raise ValueError("Continuity review is missing dimensions: " + ", ".join(missing))
+        unknown_dimensions = set(dimensions) - set(expected_dimensions)
+        if unknown_dimensions:
+            raise ValueError("Continuity review has unsupported dimension keys: " + ", ".join(sorted(unknown_dimensions)))
+        valid_statuses = {"pass", "intentional_change", "drift", "unclear"}
+        invalid = [name for name in expected_dimensions if not isinstance(dimensions[name], str) or dimensions[name] not in valid_statuses]
+        if invalid:
+            raise ValueError("Continuity review has invalid dimensions: " + ", ".join(invalid))
+
+        notes = review.get("notes")
+        if not isinstance(notes, Mapping):
+            raise ValueError("Continuity review notes are required")
+        missing_notes = [name for name in expected_dimensions if not isinstance(notes.get(name), str) or not notes[name].strip()]
+        if missing_notes:
+            raise ValueError("Continuity review is missing notes: " + ", ".join(missing_notes))
+        unknown_notes = set(notes) - set(expected_dimensions)
+        if unknown_notes:
+            raise ValueError("Continuity review has unsupported note keys: " + ", ".join(sorted(unknown_notes)))
+
+        evidence_paths = review.get("evidence_paths")
+        if not isinstance(evidence_paths, list) or not evidence_paths:
+            raise ValueError("Continuity review needs at least one evidence path")
+        if any(not isinstance(path, (str, Path)) for path in evidence_paths):
+            raise ValueError("Continuity review evidence paths must be project-relative file paths")
+        normalized_evidence = [self._media(path) for path in evidence_paths]
+        override_reason = review.get("override_reason")
+        if override_reason is not None and (not isinstance(override_reason, str) or not override_reason.strip()):
+            raise ValueError("Continuity override reason cannot be empty")
+        if any(dimensions[name] in {"drift", "unclear"} for name in expected_dimensions) and override_reason is None:
+            raise ValueError("Continuity drift or unclear status requires an override reason")
+
+        allowed_keys = {"dimensions", "notes", "evidence_paths", "override_reason"}
+        unknown = set(review) - allowed_keys
+        if unknown:
+            raise ValueError("Continuity review has unsupported fields: " + ", ".join(sorted(unknown)))
+
+        record = {
+            "reviewed_path": shot["takes"][take_id]["path"],
+            "dimensions": dict(dimensions),
+            "notes": dict(notes),
+            "evidence_paths": normalized_evidence,
+        }
+        if override_reason is not None:
+            record["override_reason"] = override_reason.strip()
+        take_metadata = shot["takes"][take_id].setdefault("metadata", {})
+        take_metadata["continuity_review"] = record
+        self._save()
+
     def asset_manifest(self) -> dict[str, Any]:
         assets = []
+        continuity_shots = {}
+        continuity_reviews = {}
         for shot_id, shot in self.data["shots"].items():
+            scene_id = shot.get("scene_id", shot_id)
+            continuity_record = {"scene_id": scene_id}
+            if shot.get("continuity_contract_version") is not None:
+                continuity_record["continuity_contract_version"] = shot["continuity_contract_version"]
+            continuity_shots[shot_id] = continuity_record
             for asset_id in shot.get("asset_ids", []):
                 item = self.data["assets"][asset_id]
-                assets.append({"id": f"asset:{quote(shot_id, safe='')}:{quote(asset_id, safe='')}", "type": "image", "path": self._media(item["path"]), "source_tool": item["metadata"].get("source_tool", "provided"), "scene_id": shot_id, "subtype": item["kind"], "generation_summary": item["description"]})
+                assets.append({"id": f"asset:{quote(shot_id, safe='')}:{quote(asset_id, safe='')}", "type": "image", "path": self._media(item["path"]), "source_tool": item["metadata"].get("source_tool", "provided"), "scene_id": scene_id, "subtype": item["kind"], "generation_summary": item["description"]})
             if shot.get("selected"):
                 take_id = shot["selected"]
                 take = shot["takes"][take_id]
-                item = {"id": f"take:{quote(shot_id, safe='')}:{quote(take_id, safe='')}", "type": "video", "path": self._media(take["path"]), "source_tool": take["metadata"].get("source_tool", "provided"), "scene_id": shot_id, "duration_seconds": take["duration_seconds"]}
+                item = {"id": f"take:{quote(shot_id, safe='')}:{quote(take_id, safe='')}", "type": "video", "path": self._media(take["path"]), "source_tool": take["metadata"].get("source_tool", "provided"), "scene_id": scene_id, "duration_seconds": take["duration_seconds"]}
                 for key in ("seed", "prompt", "model", "provider"):
                     if key in take["metadata"]:
                         item[key] = take["metadata"][key]
                 if "enhancement" in take.get("metadata", {}):
                     item["enhancement"] = take["metadata"]["enhancement"]
                 assets.append(item)
+                review = take.get("metadata", {}).get("continuity_review")
+                if review and review.get("reviewed_path") == take["path"]:
+                    continuity_reviews[shot_id] = {"take_id": take_id, **review}
         selection = {shot_id: shot["selected"] for shot_id, shot in self.data["shots"].items() if shot.get("selected")}
-        return {"version": "1.0", "assets": assets, "metadata": {"narrative_selection": selection}}
+        metadata = {
+            "narrative_selection": selection,
+            "continuity_shots": continuity_shots,
+            "continuity_reviews": continuity_reviews,
+        }
+        return {"version": "1.0", "assets": assets, "metadata": metadata}
 
     def select_take(self, shot_id: str, take_id: str) -> None:
         shot = self.data["shots"].get(shot_id)

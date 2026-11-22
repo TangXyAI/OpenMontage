@@ -68,7 +68,79 @@
       }
     },
     "total_cost_usd": { "type": "number", "minimum": 0 },
-    "metadata": { "type": "object" }
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "continuity_shots": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["scene_id"],
+            "properties": {
+              "scene_id": { "type": "string", "minLength": 1 },
+              "continuity_contract_version": { "type": "string", "const": "1.0" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "continuity_reviews": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["take_id", "reviewed_path", "dimensions", "notes", "evidence_paths"],
+            "properties": {
+              "take_id": { "type": "string", "minLength": 1 },
+              "reviewed_path": { "type": "string", "minLength": 1 },
+              "dimensions": {
+                "type": "object",
+                "required": ["identity_wardrobe", "location_anchors", "camera_continuity", "light_and_look", "story_state"],
+                "properties": {
+                  "identity_wardrobe": { "type": "string", "enum": ["pass", "intentional_change", "drift", "unclear"] },
+                  "location_anchors": { "type": "string", "enum": ["pass", "intentional_change", "drift", "unclear"] },
+                  "camera_continuity": { "type": "string", "enum": ["pass", "intentional_change", "drift", "unclear"] },
+                  "light_and_look": { "type": "string", "enum": ["pass", "intentional_change", "drift", "unclear"] },
+                  "story_state": { "type": "string", "enum": ["pass", "intentional_change", "drift", "unclear"] }
+                },
+                "additionalProperties": false
+              },
+              "notes": {
+                "type": "object",
+                "required": ["identity_wardrobe", "location_anchors", "camera_continuity", "light_and_look", "story_state"],
+                "properties": {
+                  "identity_wardrobe": { "type": "string", "minLength": 1 },
+                  "location_anchors": { "type": "string", "minLength": 1 },
+                  "camera_continuity": { "type": "string", "minLength": 1 },
+                  "light_and_look": { "type": "string", "minLength": 1 },
+                  "story_state": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+              },
+              "evidence_paths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+              "override_reason": { "type": "string", "minLength": 1 }
+            },
+            "allOf": [{
+              "if": {
+                "properties": {
+                  "dimensions": {
+                    "anyOf": [
+                      { "properties": { "identity_wardrobe": { "enum": ["drift", "unclear"] } } },
+                      { "properties": { "location_anchors": { "enum": ["drift", "unclear"] } } },
+                      { "properties": { "camera_continuity": { "enum": ["drift", "unclear"] } } },
+                      { "properties": { "light_and_look": { "enum": ["drift", "unclear"] } } },
+                      { "properties": { "story_state": { "enum": ["drift", "unclear"] } } }
+                    ]
+                  }
+                },
+                "required": ["dimensions"]
+              },
+              "then": { "required": ["override_reason"] }
+            }],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": true
+    }
   },
   "additionalProperties": false
 }

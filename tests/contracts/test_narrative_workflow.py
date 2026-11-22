@@ -77,6 +77,41 @@ def test_assets_can_be_linked_to_shots_and_exported_to_manifest(tmp_path):
     assert any(a["seed"] == 5 for a in manifest["assets"] if a["type"] == "video")
 
 
+def test_continuity_review_export_matches_asset_manifest_schema(tmp_path):
+    from lib.narrative_assets import NarrativeAssets
+    import jsonschema
+
+    for name in ("hero.png", "take.mp4", "review.png"):
+        (tmp_path / name).write_bytes(b"media")
+    catalog = NarrativeAssets(tmp_path)
+    catalog.put_asset("hero", "character", "Courier", "hero.png", entity_id="hero")
+    catalog.register_shot("s01-sh01", "s01", continuity_contract_version="1.0")
+    catalog.link_assets("s01-sh01", ["hero"])
+    catalog.add_take("s01-sh01", "take-a", "take.mp4", 4.0)
+    catalog.select_take("s01-sh01", "take-a")
+    dimensions = {
+        "identity_wardrobe": "pass",
+        "location_anchors": "pass",
+        "camera_continuity": "pass",
+        "light_and_look": "pass",
+        "story_state": "pass",
+    }
+    notes = {dimension: "Matches the approved contract." for dimension in dimensions}
+    catalog.record_continuity_review("s01-sh01", "take-a", {
+        "dimensions": dimensions,
+        "notes": notes,
+        "evidence_paths": ["review.png"],
+    })
+    manifest = catalog.asset_manifest()
+    schema = json.loads((Path(__file__).parents[2] / "schemas/artifacts/asset_manifest.schema.json").read_text(encoding="utf-8"))
+    jsonschema.validate(manifest, schema)
+
+    malformed = json.loads(json.dumps(manifest))
+    del malformed["metadata"]["continuity_reviews"]["s01-sh01"]["reviewed_path"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(malformed, schema)
+
+
 def test_binding_rejects_graph_connections_before_submitting():
     from tools._comfyui.client import ComfyUIClient, ComfyUIError
 

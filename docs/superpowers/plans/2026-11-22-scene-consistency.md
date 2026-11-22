@@ -148,6 +148,16 @@ def test_review_drift_requires_override_reason(tmp_path):
         catalog.record_continuity_review("s01-sh01", "take-a", drift_review)
     catalog.record_continuity_review("s01-sh01", "take-a", {**drift_review, "override_reason": "approved exception"})
 
+def test_review_rejects_unknown_dimension_keys(tmp_path):
+    invalid_review["dimensions"]["costume"] = "pass"
+    with pytest.raises(ValueError, match="unsupported dimension"):
+        catalog.record_continuity_review("s01-sh01", "take-a", invalid_review)
+
+def test_review_rejects_blank_override_reason(tmp_path):
+    invalid_review["override_reason"] = "  "
+    with pytest.raises(ValueError, match="override"):
+        catalog.record_continuity_review("s01-sh01", "take-a", invalid_review)
+
 def test_enhancement_invalidates_review_of_previous_path(tmp_path):
     assert "s01-sh01" not in catalog.asset_manifest()["metadata"]["continuity_reviews"]
 ```
