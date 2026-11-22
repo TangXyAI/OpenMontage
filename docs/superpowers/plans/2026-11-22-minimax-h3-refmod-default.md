@@ -17,7 +17,7 @@
 - Each Mod is keyed by the approved source `asset_id` and state; a shot uses only Mods for its referenced assets.
 - Only local MiniMax H3 Ref2VA workflows apply RefMods. Hosted H3, other providers, and model-family decisions remain unchanged.
 - Exact first/last-frame shots remain on native FL2VA. If a shot requests both RefMod and exact first/last frames, stop for an explicit choice; do not change the operation silently.
-- `MiniMaxH3RefModsLoader` exposes eight slots. Group larger sets through chained loader/apply nodes in stable order; never silently truncate.
+- `MiniMaxH3RefModsLoader` exposes eight slots, and the installed Text Encode accepts one bundle. Reject a shot with more than eight mapped Mods; do not silently truncate or attempt an unsupported chain.
 - Never load a shared RefMod just because its filename resembles a project asset. Never overwrite another project or the existing `测试人001` Mod.
 - If the live ComfyUI target lacks required H3/RefMod nodes or models, block before the batch and surface the compatible native H3 path for explicit user choice.
 - Preserve the user's current checkout and all pre-existing uncommitted RelayVSR changes. Stage only this plan's files/hunks; use patch staging for `asset_manifest.schema.json`, `asset-director.md`, and `comfyui_video.py`.
@@ -28,7 +28,7 @@
 
 - An approved source image changes after extraction: the prior Mod is rejected or rebuilt before generation, and the manifest does not advertise it as current — test in Tasks 1, 2, and 4.
 - A character or prop has multiple state variants: a shot receives the matching state Mod only, even when variants share an `entity_id` — test in Tasks 1, 3, and 4.
-- A shot combines RefMods with an existing native motion/video reference: prompt labels and final Ref2VA order remain exact, without duplicate identity references — test in Tasks 3 and 4.
+- A shot combines RefMods with an existing native image/video/audio reference: the installed Text Encode cannot map both sets, so block the shot with a clear error before submission and preserve both inputs for an explicit choice — test in Tasks 3 and 4.
 - The live ComfyUI endpoint, RefMod pack, or H3 model stack is stale or unavailable: preparation blocks before generation and does not silently fall back — test in Tasks 2 and 4.
 - The route is hosted MiniMax H3, another provider, an exact FL2VA first/last-frame operation, or an existing project with no opt-in: it keeps its approved path — test in Tasks 3 and 4.
 
@@ -182,7 +182,9 @@ git commit -m "feat: extract project-scoped MiniMax H3 RefMods"
 - Add `build_refmod_workflow(workflow: dict[str, Any], refs: list[dict[str, str]], operation: str) -> tuple[dict[str, Any], list[str]]` in `tools/_comfyui/refmod_workflow.py`. It binds existing RefMod loader/apply nodes or safely injects them into a validated local H3 Ref2VA graph; it returns the modified API graph plus the exact ordered asset IDs.
 - For `reference_to_video`, non-empty `refmod_assets` satisfy the visual-reference requirement, so zero or more native stills may accompany them. Preserve the existing two-native-image minimum when no RefMods are supplied.
 - Apply Mods only to `reference_to_video` Ref2VA workflows. Exact `first_last_frame_to_video` remains FL2VA; if a shot requests both FL2VA and RefMods, return an explicit incompatibility error before submission.
-- Keep native motion/video references and RefMods in one deterministic order, emit corresponding `<Subject N>` / `<Picture N>` labels from that same order, and chain loader/apply groups when more than eight Mods are referenced.
+- Keep ordinary native image/video/audio references on native Ref2VA. The installed Text Encode node only accepts one `H3_REF_MODS` bundle, so a graph containing both native references and project Mods must return a clear incompatibility error before submission.
+- Use the Text Encode node's ordered reference map for project Mod labels. Extract approved static images with `image_refs="separate"` so prompts address them as `<Picture N>`; do not rely on `<Subject N>` labels or legacy Apply nodes for label binding.
+- Reject more than eight project Mods in one shot because the installed loader exposes eight slots and there is no supported node that merges several loader bundles into the Text Encode input. Never silently truncate.
 - For custom H3 graphs, accept an existing RefMod chain only when its node classes and connections validate; otherwise return an explicit RefMod workflow error instead of using native conditioning silently.
 - When no Mods are present, keep the existing workflow unchanged. Hosted H3 and other model families reject accidentally supplied local RefMod bindings instead of silently ignoring them.
 
@@ -200,11 +202,9 @@ def test_refmod_graph_keeps_native_motion_inputs_and_prompt_order():
     assert ordered_asset_ids == ["hero-wet", "loc-master"]
     assert [ref["prompt_label"] for ref in shot_refmods] == ["<Subject 1>", "<Subject 2>"]
 
-def test_refmod_graph_chains_more_than_eight_mods_without_truncation():
-    workflow, ordered_asset_ids = build_refmod_workflow(reference_to_video_workflow, refs=nine_mods, operation="reference_to_video")
-    assert ordered_asset_ids == [f"asset-{i}" for i in range(9)]
-    assert workflow["refmod_loader_2"]["inputs"]["mod_1"] == "openmontage/project-a/asset-8"
-    assert workflow["refmod_apply_2"]["inputs"]["conditioning"] == ["refmod_apply_1", 0]
+def test_refmod_graph_blocks_more_than_eight_mods_without_truncation():
+    with pytest.raises(ValueError, match="at most 8 mapped assets per shot"):
+        build_refmod_workflow(reference_to_video_workflow, refs=nine_mods, operation="reference_to_video")
 
 def test_fl2va_keyframe_operation_rejects_refmods():
     with pytest.raises(ValueError, match="FL2VA"):

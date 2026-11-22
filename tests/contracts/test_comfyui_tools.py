@@ -6,6 +6,7 @@ schemas, status reporting, and cost estimates.
 """
 
 import json
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -123,6 +124,8 @@ class TestContract:
         assert "workflow_json" in props
         assert "workflow_path" in props
         assert "output_node" in props
+        if cls is ComfyUIVideo:
+            assert "reference_videos" in props
 
     def test_custom_workflow_requires_output_node(self, cls):
         tool = cls()
@@ -1711,8 +1714,16 @@ def _test_refmod(asset_id="hero-wet", index=1):
         "concept_type": "identity",
         "state": "wet",
         "description": f"approved reference for {asset_id}",
-        "prompt_label": f"<Subject {index}>",
+        "prompt_label": f"<Picture {index}>",
+        "refmod_sha256": hashlib.sha256(b"test-refmod").hexdigest(),
     }
+
+
+def _write_test_refmod_loader(workspace, ref):
+    loader_path = Path(workspace) / "models" / "refmods" / f"{ref['loader_name']}.safetensors"
+    loader_path.parent.mkdir(parents=True, exist_ok=True)
+    loader_path.write_bytes(b"test-refmod")
+    return loader_path
 
 
 def test_hyperflow_refmod_only_reference_to_video_needs_no_native_stills(tmp_path):
@@ -1721,7 +1732,7 @@ def test_hyperflow_refmod_only_reference_to_video_needs_no_native_stills(tmp_pat
 
     workflow, _, metadata = tool._build_hyperflow(
         {
-            "prompt": "<Subject 1> walks through rain.",
+            "prompt": "<Picture 1> walks through rain.",
             "operation": "reference_to_video",
             "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
             "loader": "gguf",
@@ -1737,7 +1748,7 @@ def test_hyperflow_refmod_only_reference_to_video_needs_no_native_stills(tmp_pat
     )
     assert "ref_images.ref_image_0" not in workflow["5"]["inputs"]
     assert "ref_images.ref_image_1" not in workflow["5"]["inputs"]
-    assert metadata["refmod_assets"][0]["prompt_label"] == "<Subject 1>"
+    assert metadata["refmod_assets"][0]["prompt_label"] == "<Picture 1>"
 
 
 def test_hyperflow_refmod_provenance_preserves_prompt_reference_order(tmp_path):
@@ -1747,7 +1758,7 @@ def test_hyperflow_refmod_provenance_preserves_prompt_reference_order(tmp_path):
 
     _, _, metadata = tool._build_hyperflow(
         {
-            "prompt": "<Subject 1> crosses <Subject 2>.",
+            "prompt": "<Picture 1> crosses <Picture 2>.",
             "operation": "reference_to_video",
             "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
             "loader": "gguf",
@@ -1763,8 +1774,8 @@ def test_hyperflow_refmod_provenance_preserves_prompt_reference_order(tmp_path):
         "loc-master",
     ]
     assert [item["prompt_label"] for item in metadata["refmod_assets"]] == [
-        "<Subject 1>",
-        "<Subject 2>",
+        "<Picture 1>",
+        "<Picture 2>",
     ]
 
 
@@ -1803,7 +1814,7 @@ def test_local_h3_refmod_preflight_checks_nodes_on_selected_server(
     monkeypatch.setattr(video_module, "ComfyUIClient", MissingRefModNodesClient)
 
     result = tool.execute({
-        "prompt": "<Subject 1> walks through rain.",
+        "prompt": "<Picture 1> walks through rain.",
         "model_family": "minimax_h3_hyperflow_local",
         "operation": "reference_to_video",
         "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
@@ -1816,7 +1827,71 @@ def test_local_h3_refmod_preflight_checks_nodes_on_selected_server(
 
     assert not result.success
     assert "MiniMaxH3RefModsLoader" in result.error
-    assert seen["nodes"] == ["MiniMaxH3RefModsLoader", "MiniMaxH3RefModApply"]
+    assert "MiniMaxH3RefModTextEncode" in result.error
+    assert seen["nodes"] == [
+        "MiniMaxH3RefModsLoader",
+        "MiniMaxH3RefModTextEncode",
+        "MiniMaxH3ReferenceToVideo",
+        "BasicGuider",
+    ]
+
+
+def test_local_h3_refmod_preflight_rejects_missing_encoder_socket(tmp_path):
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    tool._client.has_node = lambda _node: True
+    tool._client.check_node_inputs = lambda node, _required: (
+        ["mods"] if node == "MiniMaxH3RefModTextEncode" else []
+    )
+    tool._client.check_models = lambda required: (list(required), [])
+    _write_test_refmod_loader(tmp_path, _test_refmod())
+    generated = []
+    tool._client.generate = lambda *args, **kwargs: generated.append(True) or [
+        Path(kwargs["dest"])
+    ]
+
+    result = tool.execute({
+        "prompt": "<Picture 1> walks through rain.",
+        "model_family": "minimax_h3_hyperflow_local",
+        "operation": "reference_to_video",
+        "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+        "loader": "gguf",
+        "refmod_assets": [_test_refmod()],
+        "comfyui_workspace": str(tmp_path),
+        "output_path": str(tmp_path / "video.mp4"),
+        "seed": 123,
+    })
+
+    assert not result.success
+    assert "MiniMaxH3RefModTextEncode" in result.error
+    assert "mods" in result.error
+    assert generated == []
+
+
+def test_local_h3_refmod_preflight_surfaces_schema_lookup_failure():
+    from tools._comfyui.client import ComfyUIError
+
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    tool._client.has_node = lambda _node: True
+
+    def fail_lookup(_node, _required):
+        raise ComfyUIError("could not inspect selected node input contract")
+
+    tool._client.check_node_inputs = fail_lookup
+
+    result = tool.execute({
+        "prompt": "<Picture 1> walks through rain.",
+        "model_family": "minimax_h3_hyperflow_local",
+        "operation": "reference_to_video",
+        "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+        "loader": "gguf",
+        "refmod_assets": [_test_refmod()],
+        "output_path": "video.mp4",
+    })
+
+    assert not result.success
+    assert "input contract" in result.error
 
 
 def test_comfyui_video_uses_explicit_server_url(tmp_path, monkeypatch):
@@ -1883,12 +1958,16 @@ def test_custom_h3_graph_without_ref2va_conditioning_is_blocked(tmp_path):
     tool = ComfyUIVideo()
     tool._client.is_available = lambda: True
     tool._client.has_node = lambda node: True
+    tool._client.check_node_inputs = lambda _node, _required: []
+    tool._client.check_models = lambda required: (list(required), [])
     tool._client.generate = lambda *args, **kwargs: pytest.fail(
         "incompatible custom H3 graph must be rejected before submission"
     )
 
+    workspace = tmp_path / "comfy"
+    _write_test_refmod_loader(workspace, _test_refmod())
     result = tool.execute({
-        "prompt": "<Subject 1> walks through rain.",
+        "prompt": "<Picture 1> walks through rain.",
         "model_family": "minimax_h3_hyperflow_local",
         "operation": "reference_to_video",
         "workflow_json": json.dumps({
@@ -1897,8 +1976,147 @@ def test_custom_h3_graph_without_ref2va_conditioning_is_blocked(tmp_path):
         }),
         "output_node": "9",
         "refmod_assets": [_test_refmod()],
+        "comfyui_workspace": str(workspace),
         "output_path": str(tmp_path / "video.mp4"),
     })
 
     assert not result.success
     assert "Ref2VA conditioning" in result.error
+
+
+def test_stock_local_h3_custom_ref2v_graph_can_apply_project_refmods(tmp_path):
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    tool._client.has_node = lambda _node: True
+    tool._client.check_node_inputs = lambda _node, _required: []
+    tool._client.check_models = lambda required: (list(required), [])
+    workspace = tmp_path / "comfy"
+    _write_test_refmod_loader(workspace, _test_refmod("hero-wet", 1))
+    captured = {}
+
+    def generate(workflow, output_node, dest, **kwargs):
+        captured["workflow"] = workflow
+        captured["output_node"] = output_node
+        return [Path(dest)]
+
+    tool._client.generate = generate
+    workflow = {
+        "1": {"class_type": "HyperFlowLoader", "inputs": {"unet_name": "local-h3.gguf"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "h3-clip.safetensors"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": "h3-video-vae.safetensors"}},
+        "4": {"class_type": "VAELoader", "inputs": {"vae_name": "h3-audio-vae.safetensors"}},
+        "5": {
+            "class_type": "MiniMaxH3ReferenceToVideo",
+            "inputs": {
+                "clip": ["2", 0], "vae": ["3", 0], "audio_vae": ["4", 0],
+                "prompt": "<Picture 1> walks through the alley.",
+                "width": 960, "height": 544, "length": 73,
+            },
+        },
+        "9": {"class_type": "BasicGuider", "inputs": {"conditioning": ["5", 0]}},
+        "13": {"class_type": "CreateVideo", "inputs": {"images": ["11", 0], "audio": ["12", 0]}},
+        "14": {"class_type": "SaveVideo", "inputs": {"video": ["13", 0]}},
+    }
+
+    result = tool.execute({
+        "prompt": "<Picture 1> walks through the alley.",
+        "model_family": "minimax_h3_local",
+        "operation": "reference_to_video",
+        "workflow_json": json.dumps(workflow),
+        "output_node": "14",
+        "refmod_assets": [_test_refmod("hero-wet", 1)],
+        "comfyui_workspace": str(workspace),
+        "output_path": str(tmp_path / "custom-h3.mp4"),
+        "seed": 22,
+    })
+
+    assert result.success, result.error
+    assert captured["output_node"] == "14"
+    assert result.data["workflow_provenance"]["refmod_asset_ids"] == ["hero-wet"]
+
+
+def test_video_cache_key_tracks_custom_graph_and_named_reference_bytes(tmp_path):
+    tool = ComfyUIVideo()
+    reference_path = tmp_path / "motion-reference.mp4"
+    reference_path.write_bytes(b"reference-a")
+    common = {
+        "prompt": "<Picture 1> crosses the room.",
+        "operation": "reference_to_video",
+        "model_family": "minimax_h3_local",
+        "workflow_json": json.dumps({
+            "video_ref_loader": {"class_type": "LoadVideo", "inputs": {"video": "old.mp4"}},
+            "14": {"class_type": "SaveVideo", "inputs": {"video": ["video_ref_loader", 0]}},
+        }),
+        "workflow_bindings": {
+            "prompt": [{"node": "5", "input": "prompt"}],
+            "reference_videos.motion": [{"node": "video_ref_loader", "input": "video"}],
+        },
+        "reference_videos": {"motion": str(reference_path)},
+        "output_node": "14",
+        "seed": 15,
+    }
+    original_key = tool.cache_key(common)
+    changed_graph = {
+        **common,
+        "workflow_json": json.dumps({"2": {"class_type": "SaveVideo", "inputs": {}}}),
+    }
+    changed_bindings = {
+        **common,
+        "workflow_bindings": {"prompt": [{"node": "6", "input": "prompt"}]},
+    }
+    reference_path.write_bytes(b"reference-b")
+    changed_reference = {**common, "reference_images": {"motion": str(reference_path)}}
+
+    assert tool.cache_key(changed_graph) != original_key
+    assert tool.cache_key(changed_bindings) != original_key
+    assert tool.cache_key(changed_reference) != original_key
+
+
+def test_custom_h3_workflow_uploads_native_motion_video_reference(tmp_path):
+    tool = ComfyUIVideo()
+    tool._client.is_available = lambda: True
+    motion_path = tmp_path / "approved-motion.mp4"
+    motion_path.write_bytes(b"approved-motion-video")
+    uploaded = {}
+    submitted = {}
+
+    def upload_input_file(path, name, mime_type="application/octet-stream"):
+        uploaded.update(path=Path(path), name=name, mime_type=mime_type)
+        return "uploaded-motion.mp4"
+
+    def generate(workflow, output_node, dest, **kwargs):
+        submitted.update(workflow=workflow, output_node=output_node)
+        return [Path(dest)]
+
+    tool._client.upload_input_file = upload_input_file
+    tool._client.generate = generate
+    workflow = {
+        "video_ref_loader": {
+            "class_type": "LoadVideo",
+            "inputs": {"video": "old.mp4"},
+        },
+        "42": {"class_type": "SaveVideo", "inputs": {"video": ["video_ref_loader", 0]}},
+    }
+
+    result = tool.execute({
+        "prompt": "keep the motion from the reference clip",
+        "model_family": "minimax_h3_local",
+        "operation": "reference_to_video",
+        "workflow_json": json.dumps(workflow),
+        "output_node": "42",
+        "workflow_bindings": {
+            "reference_videos.motion": [
+                {"node": "video_ref_loader", "input": "video"}
+            ]
+        },
+        "reference_videos": {"motion": str(motion_path)},
+        "output_path": str(tmp_path / "out.mp4"),
+        "seed": 24,
+    })
+
+    assert result.success, result.error
+    assert uploaded["path"] == motion_path
+    assert uploaded["mime_type"] == "video/mp4"
+    assert submitted["workflow"]["video_ref_loader"]["inputs"]["video"] == (
+        "uploaded-motion.mp4"
+    )

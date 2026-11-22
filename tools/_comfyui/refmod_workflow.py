@@ -11,6 +11,7 @@ _REF2VA_NODE = "MiniMaxH3ReferenceToVideo"
 _FL2VA_NODE = "MiniMaxH3ImageToVideo"
 _LOADER_NODE = "MiniMaxH3RefModsLoader"
 _APPLY_NODE = "MiniMaxH3RefModApply"
+_TEXT_ENCODE_NODE = "MiniMaxH3RefModTextEncode"
 _REFMODS_PER_LOADER = 8
 _LOADER_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$")
 
@@ -59,19 +60,21 @@ def _new_loader(loader_name_by_slot: list[str]) -> dict[str, Any]:
     return {"class_type": _LOADER_NODE, "inputs": inputs}
 
 
-def _new_apply(conditioning: list[Any], loader_id: str) -> dict[str, Any]:
+def _new_text_encoder(
+    h3_inputs: dict[str, Any], loader_id: str, prompt: str
+) -> dict[str, Any]:
+    inputs: dict[str, Any] = {
+        "clip": copy.deepcopy(h3_inputs["clip"]),
+        "mods": [loader_id, 0],
+        "prompt": prompt,
+        "reference_fps": 24.0,
+        "max_total_tokens": 0,
+    }
+    if "vae" in h3_inputs:
+        inputs["vae"] = copy.deepcopy(h3_inputs["vae"])
     return {
-        "class_type": _APPLY_NODE,
-        "inputs": {
-            "conditioning": conditioning,
-            "mods": [loader_id, 0],
-            "override": False,
-            "retention": 1.0,
-            "curve_direction": "constant",
-            "scramble_seed": -1,
-            "curve_shape": "linear",
-            "curve_value": 1.0,
-        },
+        "class_type": _TEXT_ENCODE_NODE,
+        "inputs": inputs,
     }
 
 
@@ -100,6 +103,12 @@ def _validate_refs(refs: list[dict[str, str]]) -> list[dict[str, str]]:
             part in {".", ".."} for part in loader_name.split("/")
         ):
             raise ValueError(f"Invalid RefMod loader_name for {asset_id!r}")
+        expected_label = f"<Picture {index}>"
+        if ref["prompt_label"] != expected_label:
+            raise ValueError(
+                f"RefMod prompt_label order mismatch for {asset_id!r}; "
+                f"expected {expected_label}"
+            )
         normalized.append({**ref, "asset_id": asset_id, "loader_name": loader_name})
     return normalized
 
@@ -120,19 +129,20 @@ def _find_conditioning_path(workflow: dict[str, Any]) -> tuple[str, dict[str, An
     if "prompt" not in h3_node["inputs"]:
         raise ValueError(f"Ref2VA conditioning node {h3_id!r} is missing input 'prompt'")
 
-    apply_ids = {
+    conditioning_sources = {
         str(node_id)
         for node_id, node in workflow.items()
-        if isinstance(node, dict) and node.get("class_type") == _APPLY_NODE
+        if isinstance(node, dict)
+        and node.get("class_type") in {_APPLY_NODE, _TEXT_ENCODE_NODE}
     }
     conditioning_consumers = []
     for node_id, node in workflow.items():
         if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
             continue
-        if node.get("class_type") == _APPLY_NODE:
+        if node.get("class_type") in {_APPLY_NODE, _TEXT_ENCODE_NODE}:
             continue
         conditioning = _connection(node["inputs"].get("conditioning"))
-        if conditioning and conditioning[0] in ({h3_id} | apply_ids):
+        if conditioning and conditioning[0] in ({h3_id} | conditioning_sources):
             conditioning_consumers.append((str(node_id), node, conditioning))
     if len(conditioning_consumers) != 1:
         raise ValueError(
@@ -144,9 +154,9 @@ def _find_conditioning_path(workflow: dict[str, Any]) -> tuple[str, dict[str, An
     return h3_id, sink
 
 
-def _existing_chain(
+def _existing_text_encode(
     workflow: dict[str, Any], h3_id: str, sink: dict[str, Any]
-) -> list[tuple[str, str]]:
+) -> tuple[str, str] | None:
     loaders = {
         str(node_id)
         for node_id, node in workflow.items()
@@ -157,46 +167,35 @@ def _existing_chain(
         for node_id, node in workflow.items()
         if isinstance(node, dict) and node.get("class_type") == _APPLY_NODE
     }
-    if not loaders and not applies:
-        return []
-    if not loaders or not applies or len(loaders) != len(applies):
-        raise ValueError("RefMod workflow has an incomplete loader/apply chain")
-
-    chain: list[tuple[str, str]] = []
-    used_loaders: set[str] = set()
-    current = _connection(sink["inputs"].get("conditioning"))
-    visited: set[str] = set()
-    while current and current[0] in applies:
-        apply_id = current[0]
-        if current[1] != 0 or apply_id in visited:
-            raise ValueError("RefMod workflow has a cyclic or invalid apply connection")
-        visited.add(apply_id)
-        apply_node = _node(workflow, apply_id, _APPLY_NODE)
-        loader_connection = _connection(apply_node["inputs"].get("mods"))
-        conditioning_connection = _connection(apply_node["inputs"].get("conditioning"))
-        if (
-            loader_connection is None
-            or loader_connection[0] not in loaders
-            or loader_connection[1] != 0
-            or conditioning_connection is None
-            or conditioning_connection[1] != 0
-        ):
-            raise ValueError("RefMod workflow has invalid loader/apply connections")
-        loader_id = loader_connection[0]
-        if loader_id in used_loaders:
-            raise ValueError("RefMod workflow reuses a loader in more than one apply node")
-        used_loaders.add(loader_id)
-        chain.append((apply_id, loader_id))
-        current = conditioning_connection
-
-    if current != (h3_id, 0):
+    encoders = {
+        str(node_id)
+        for node_id, node in workflow.items()
+        if isinstance(node, dict) and node.get("class_type") == _TEXT_ENCODE_NODE
+    }
+    if applies:
         raise ValueError(
-            "RefMod workflow chain does not terminate at the Ref2VA conditioning node"
+            "Legacy RefMod Apply graphs do not bind prompt labels; use H3 RefMod Text Encode"
         )
-    if visited != applies or used_loaders != loaders:
-        raise ValueError("RefMod workflow contains an unconnected loader/apply node")
-    chain.reverse()
-    return chain
+    if not loaders and not encoders:
+        return None
+    if len(loaders) != 1 or len(encoders) != 1:
+        raise ValueError("RefMod workflow requires one linked loader and Text Encode node")
+
+    loader_id = next(iter(loaders))
+    encoder_id = next(iter(encoders))
+    if _connection(sink["inputs"].get("conditioning")) != (encoder_id, 0):
+        raise ValueError("RefMod Text Encode output is not connected to the Ref2VA guider")
+    loader = _node(workflow, loader_id, _LOADER_NODE)
+    encoder = _node(workflow, encoder_id, _TEXT_ENCODE_NODE)
+    h3_node = _node(workflow, h3_id, _REF2VA_NODE)
+    if _connection(encoder["inputs"].get("mods")) != (loader_id, 0):
+        raise ValueError("RefMod Text Encode is not connected to its loader")
+    for key in ("clip", "vae"):
+        if _connection(encoder["inputs"].get(key)) != _connection(h3_node["inputs"].get(key)):
+            raise ValueError(f"RefMod Text Encode {key} input must match the Ref2VA graph")
+    if not isinstance(encoder["inputs"].get("prompt"), str):
+        raise ValueError("RefMod Text Encode is missing input 'prompt'")
+    return encoder_id, loader_id
 
 
 def build_refmod_workflow(
@@ -220,44 +219,67 @@ def build_refmod_workflow(
         raise ValueError("RefMod workflow must be a non-empty API-format graph")
 
     normalized_refs = _validate_refs(refs)
+    if len(normalized_refs) > _REFMODS_PER_LOADER:
+        raise ValueError(
+            "The installed H3 RefMod Text Encode loader supports at most 8 "
+            "mapped assets per shot"
+        )
     result = copy.deepcopy(workflow)
     h3_id, sink = _find_conditioning_path(result)
-    chain = _existing_chain(result, h3_id, sink)
-    if not chain and _connection(sink["inputs"].get("conditioning")) != (h3_id, 0):
+    h3_node = _node(result, h3_id, _REF2VA_NODE)
+    native_reference_inputs = [
+        key
+        for key, value in h3_node["inputs"].items()
+        if key.startswith(("ref_images.", "ref_videos.", "ref_audios.", "ref_video_audios."))
+        and _connection(value) is not None
+    ]
+    if native_reference_inputs:
         raise ValueError(
-            "RefMod workflow BasicGuider is not connected to the Ref2VA conditioning node"
+            "The installed H3 RefMod Text Encode cannot map project RefMods "
+            "together with native image/motion references; choose one Ref2VA reference path"
+        )
+    chain = _existing_text_encode(result, h3_id, sink)
+    if chain is None and _connection(sink["inputs"].get("conditioning")) != (h3_id, 0):
+        raise ValueError(
+            "RefMod workflow consumer is not connected to the Ref2VA conditioning node"
         )
 
-    groups = [
-        normalized_refs[start : start + _REFMODS_PER_LOADER]
-        for start in range(0, len(normalized_refs), _REFMODS_PER_LOADER)
-    ]
-    group_count = max(len(groups), len(chain))
-    h3_connection: list[Any] = [h3_id, 0]
-    for group_index in range(1, group_count + 1):
-        group = groups[group_index - 1] if group_index <= len(groups) else []
-        if group_index <= len(chain):
-            apply_id, loader_id = chain[group_index - 1]
-        else:
-            apply_id = _unique_id(result, f"refmod_apply_{group_index}")
-            loader_id = _unique_id(result, f"refmod_loader_{group_index}")
-            result[loader_id] = _new_loader([])
-            result[apply_id] = _new_apply(h3_connection, loader_id)
+    if chain is None:
+        loader_id = _unique_id(result, "refmod_loader_1")
+        encoder_id = _unique_id(result, "refmod_text_encode_1")
+        result[loader_id] = _new_loader([])
+        result[encoder_id] = _new_text_encoder(
+            h3_node["inputs"], loader_id, str(h3_node["inputs"]["prompt"])
+        )
+    else:
+        encoder_id, loader_id = chain
+        encoder = _node(result, encoder_id, _TEXT_ENCODE_NODE)
+        prompt = h3_node["inputs"].get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            prompt = encoder["inputs"].get("prompt")
+        if not isinstance(prompt, str):
+            raise ValueError("RefMod Text Encode is missing input 'prompt'")
+        encoder["inputs"]["prompt"] = prompt
 
-        loader = _node(result, loader_id, _LOADER_NODE)
-        apply_node = _node(result, apply_id, _APPLY_NODE)
-        if group_index > len(chain):
-            apply_node["inputs"]["conditioning"] = list(h3_connection)
-            apply_node["inputs"]["mods"] = [loader_id, 0]
+    encoder = _node(result, encoder_id, _TEXT_ENCODE_NODE)
+    loader = _node(result, loader_id, _LOADER_NODE)
+    prompt = encoder["inputs"].get("prompt")
+    labels = [ref["prompt_label"] for ref in normalized_refs]
+    positions = [prompt.find(label) if isinstance(prompt, str) else -1 for label in labels]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise ValueError(
+            "RefMod prompt is missing or misorders its <Picture N> labels"
+        )
 
-        for slot in range(1, _REFMODS_PER_LOADER + 1):
-            loader["inputs"][f"mod_{slot}"] = "(none)"
-            loader["inputs"][f"strength_{slot}"] = 1.0
-            loader["inputs"][f"copies_{slot}"] = 1
-        for slot, ref in enumerate(group, start=1):
-            loader["inputs"][f"mod_{slot}"] = ref["loader_name"]
-
-        h3_connection = [apply_id, 0]
-
-    sink["inputs"]["conditioning"] = h3_connection
+    for slot in range(1, _REFMODS_PER_LOADER + 1):
+        loader["inputs"][f"mod_{slot}"] = "(none)"
+        loader["inputs"][f"strength_{slot}"] = 1.0
+        loader["inputs"][f"copies_{slot}"] = 1
+    for slot, ref in enumerate(normalized_refs, start=1):
+        loader["inputs"][f"mod_{slot}"] = ref["loader_name"]
+    encoder["inputs"]["mods"] = [loader_id, 0]
+    encoder["inputs"]["clip"] = copy.deepcopy(h3_node["inputs"]["clip"])
+    encoder["inputs"]["vae"] = copy.deepcopy(h3_node["inputs"]["vae"])
+    h3_node["inputs"]["prompt"] = ""
+    sink["inputs"]["conditioning"] = [encoder_id, 0]
     return result, [ref["asset_id"] for ref in normalized_refs]

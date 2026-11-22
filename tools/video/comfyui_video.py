@@ -8,6 +8,7 @@ via the ``workflow_json`` input.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -37,6 +38,7 @@ from tools._comfyui.metadata import (
     model_stack,
     workflow_hash,
 )
+from tools._comfyui.h3_contracts import REFMOD_VIDEO_NODE_INPUT_REQUIREMENTS
 from tools.video._shared import probe_output
 
 _WORKFLOWS = Path(__file__).resolve().parent.parent / "_comfyui" / "workflows"
@@ -251,6 +253,14 @@ class ComfyUIVideo(BaseTool):
                     "Two are required when no project RefMods are supplied."
                 ),
             },
+            "reference_videos": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": (
+                    "Named local motion/video references for custom H3 Ref2VA graphs. "
+                    "Bind each with workflow_bindings key reference_videos.<name>."
+                ),
+            },
             "refmod_assets": {
                 "type": "array",
                 "items": {
@@ -262,6 +272,7 @@ class ComfyUIVideo(BaseTool):
                         "state",
                         "description",
                         "prompt_label",
+                        "refmod_sha256",
                     ],
                     "properties": {
                         key: {"type": "string"}
@@ -274,6 +285,7 @@ class ComfyUIVideo(BaseTool):
                             "prompt_label",
                             "source_sha256",
                             "refmod_sha256",
+                            "project_path",
                         )
                     },
                 },
@@ -344,6 +356,10 @@ class ComfyUIVideo(BaseTool):
             "server_url": {
                 "type": "string",
                 "description": "Optional ComfyUI server URL for this execution only.",
+            },
+            "comfyui_workspace": {
+                "type": "string",
+                "description": "Accessible ComfyUI workspace used to verify project RefMod loader copies.",
             },
             "workflow_json": {
                 "type": "string",
@@ -417,10 +433,18 @@ class ComfyUIVideo(BaseTool):
         "seed",
         "reference_image_path",
         "reference_image_paths",
+        "reference_videos",
         "first_frame_image_path",
         "last_frame_image_path",
         "refmod_assets",
         "server_url",
+        "workflow_json",
+        "workflow_path",
+        "workflow_bindings",
+        "reference_images",
+        "output_node",
+        "workflow_model",
+        "workflow_model_stack",
     ]
     side_effects = ["writes video file to output_path"]
     user_visible_verification = [
@@ -605,6 +629,7 @@ class ComfyUIVideo(BaseTool):
         if (
             requested_operation in _HYPERFLOW_ONLY_OPERATIONS
             and model_family != "minimax_h3_hyperflow_local"
+            and not (model_family == "minimax_h3_local" and custom_workflow)
         ):
             return ToolResult(
                 success=False,
@@ -698,7 +723,9 @@ class ComfyUIVideo(BaseTool):
         if refmod_assets and not resume_id:
             required_refmod_nodes = (
                 "MiniMaxH3RefModsLoader",
-                "MiniMaxH3RefModApply",
+                "MiniMaxH3RefModTextEncode",
+                "MiniMaxH3ReferenceToVideo",
+                "BasicGuider",
             )
             missing_refmod_nodes = [
                 node for node in required_refmod_nodes if not client.has_node(node)
@@ -712,6 +739,33 @@ class ComfyUIVideo(BaseTool):
                         + ", ".join(missing_refmod_nodes)
                     ),
                 )
+            missing_refmod_inputs = []
+            try:
+                for node, required_inputs in REFMOD_VIDEO_NODE_INPUT_REQUIREMENTS.items():
+                    missing_inputs = client.check_node_inputs(node, required_inputs)
+                    if missing_inputs:
+                        missing_refmod_inputs.append(
+                            f"{node} ({', '.join(missing_inputs)})"
+                        )
+            except ComfyUIError as exc:
+                return ToolResult(
+                    success=False,
+                    error=f"Local H3 RefMod node input validation failed: {exc}",
+                )
+            if missing_refmod_inputs:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "Local H3 RefMod execution is blocked; the selected ComfyUI "
+                        "server has incompatible node inputs: "
+                        + ", ".join(missing_refmod_inputs)
+                    ),
+                )
+            loader_error = self._verify_refmod_loader_copies(
+                refmod_assets, inputs.get("comfyui_workspace")
+            )
+            if loader_error:
+                return ToolResult(success=False, error=loader_error)
 
         operation = inputs.get("operation", "text_to_video")
 
@@ -762,7 +816,43 @@ class ComfyUIVideo(BaseTool):
                     for node in workflow.values() if isinstance(node, dict)
                 ):
                     raise ComfyUIError("Local MiniMax H3 workflow contains a hosted ComfyUI Partner Node")
-                workflow = client.bind_workflow(workflow, inputs.get("workflow_bindings", {}), {**inputs, "seed": seed})
+                workflow_bindings = inputs.get("workflow_bindings", {})
+                binding_values = {**inputs, "seed": seed}
+                reference_videos = dict(inputs.get("reference_videos") or {})
+                for parameter in workflow_bindings:
+                    if not parameter.startswith("reference_videos."):
+                        continue
+                    reference_key = parameter.split(".", 1)[1]
+                    reference_path = reference_videos.get(reference_key)
+                    if not reference_path or not Path(reference_path).is_file():
+                        raise ComfyUIError(
+                            f"Native motion reference {reference_key!r} is missing"
+                        )
+                    reference_path = Path(reference_path)
+                    suffix = reference_path.suffix.lower()
+                    mime_type = {
+                        ".mp4": "video/mp4",
+                        ".mov": "video/quicktime",
+                        ".webm": "video/webm",
+                        ".mkv": "video/x-matroska",
+                        ".avi": "video/x-msvideo",
+                    }.get(suffix, "application/octet-stream")
+                    upload_name = (
+                        "om_motion_"
+                        + hashlib.sha256(
+                            f"{output_path.stem}:{reference_key}".encode("utf-8")
+                        ).hexdigest()[:16]
+                        + suffix
+                    )
+                    reference_videos[reference_key] = client.upload_input_file(
+                        reference_path, upload_name, mime_type
+                    )
+                    binding_values[parameter] = reference_videos[reference_key]
+                if reference_videos:
+                    binding_values["reference_videos"] = reference_videos
+                workflow = client.bind_workflow(
+                    workflow, workflow_bindings, binding_values
+                )
                 if refmod_assets:
                     workflow, ordered_asset_ids = build_refmod_workflow(
                         workflow, refmod_assets, operation
@@ -793,6 +883,15 @@ class ComfyUIVideo(BaseTool):
                 )
             else:
                 workflow, output_node = self._build_t2v(inputs, seed, output_path)
+
+            if refmod_assets and not resume_id:
+                required_models = self._workflow_model_files(workflow)
+                _, missing_models = client.check_models(required_models)
+                if missing_models:
+                    raise ComfyUIError(
+                        "Local H3 RefMod execution is blocked; the selected ComfyUI "
+                        "server is missing models: " + ", ".join(missing_models)
+                    )
 
             provenance = (resume_context.get("workflow_provenance") or {"source": "unknown_resumed_task", "prompt_id": resume_id, "output_node": output_node}
                           if resume_id else self._workflow_provenance(
@@ -1109,20 +1208,16 @@ class ComfyUIVideo(BaseTool):
                     workflow.pop(node_id, None)
             if refmod_bindings:
                 values["reference_images"] = refmod_bindings
-            if refmod_assets:
-                workflow, ordered_asset_ids = build_refmod_workflow(
-                    workflow, refmod_assets, operation
-                )
-                refmod_asset_ids = ordered_asset_ids
-                refmod_provenance = self._refmod_provenance(
-                    refmod_assets, ordered_asset_ids
-                )
-            else:
-                refmod_provenance = []
-        else:
-            refmod_provenance = []
 
         workflow = client.bind_workflow(workflow, bindings, values)
+        if operation == "reference_to_video" and refmod_assets:
+            workflow, ordered_asset_ids = build_refmod_workflow(
+                workflow, refmod_assets, operation
+            )
+            refmod_asset_ids = ordered_asset_ids
+            refmod_provenance = self._refmod_provenance(
+                refmod_assets, ordered_asset_ids
+            )
         metadata = {
             "workflow": workflow_file,
             "checkpoint_name": checkpoint_name,
@@ -1133,6 +1228,31 @@ class ComfyUIVideo(BaseTool):
             metadata["refmod_asset_ids"] = refmod_asset_ids
             metadata["refmod_workflow"] = "MiniMaxH3RefModApply"
         return workflow, _HYPERFLOW_OUTPUT_NODE, metadata
+
+    @staticmethod
+    def _verify_refmod_loader_copies(
+        refs: list[dict[str, Any]], workspace_path: str | Path | None
+    ) -> str | None:
+        if not workspace_path:
+            return "Project RefMods require the selected comfyui_workspace path"
+        workspace = Path(workspace_path).resolve()
+        model_root = (workspace / "models" / "refmods").resolve()
+        for ref in refs:
+            if not isinstance(ref, dict):
+                return "RefMod binding must be an asset descriptor object"
+            loader_name = str(ref.get("loader_name", "")).replace("\\", "/")
+            expected_hash = ref.get("refmod_sha256")
+            if not loader_name or not isinstance(expected_hash, str):
+                return f"RefMod binding {ref.get('asset_id', '<unknown>')} is missing its loader name or hash"
+            loader_path = (model_root / f"{loader_name}.safetensors").resolve()
+            if not loader_path.is_relative_to(model_root):
+                return f"RefMod loader path leaves the selected models/refmods folder: {loader_name}"
+            if not loader_path.is_file():
+                return f"RefMod loader copy is missing for {ref.get('asset_id', loader_name)}"
+            digest = hashlib.sha256(loader_path.read_bytes()).hexdigest()
+            if digest != expected_hash:
+                return f"RefMod loader copy hash mismatch for {ref.get('asset_id', loader_name)}"
+        return None
 
     @staticmethod
     def _refmod_provenance(
@@ -1155,6 +1275,26 @@ class ComfyUIVideo(BaseTool):
             }
             for asset_id in ordered_asset_ids
         ]
+
+    @staticmethod
+    def _workflow_model_files(workflow: dict[str, Any]) -> list[str]:
+        """Collect model filenames embedded in the selected API graph."""
+        fields = {
+            "unet_name",
+            "ckpt_name",
+            "clip_name",
+            "vae_name",
+            "audio_vae_name",
+            "model_name",
+        }
+        names = {
+            value
+            for node in workflow.values()
+            if isinstance(node, dict) and isinstance(node.get("inputs"), dict)
+            for key, value in node["inputs"].items()
+            if key in fields and isinstance(value, str) and value.strip()
+        }
+        return sorted(names)
 
     @staticmethod
     def _probe_media(path: Path) -> dict[str, Any]:

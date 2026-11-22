@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -37,6 +38,9 @@ OPTIONS = [
 class RecordingComfyUIClient(RealComfyUIClient):
     workspace: Path | None = None
     instances: list["RecordingComfyUIClient"] = []
+    missing_nodes: set[str] = set()
+    missing_models: set[str] = set()
+    submissions = 0
 
     def __init__(self, server_url=None, capability=None):
         self.server_url = server_url or "http://localhost:8188"
@@ -54,10 +58,14 @@ class RecordingComfyUIClient(RealComfyUIClient):
         return "fake server unavailable"
 
     def has_node(self, _node_class):
-        return True
+        return _node_class not in type(self).missing_nodes
 
     def check_models(self, required):
-        return list(required), []
+        missing = [name for name in required if name in type(self).missing_models]
+        return [name for name in required if name not in missing], missing
+
+    def check_node_inputs(self, _node_class, _required_inputs):
+        return []
 
     def upload_image(self, local_path, _name):
         return f"remote-{Path(local_path).name}"
@@ -103,6 +111,7 @@ class RecordingComfyUIClient(RealComfyUIClient):
     def generate(self, workflow, output_node, dest, **_kwargs):
         self.workflow = copy.deepcopy(workflow)
         self.output_node = output_node
+        type(self).submissions += 1
         return [Path(dest)]
 
 
@@ -180,6 +189,9 @@ def _run_pilot(project: Path, workspace: Path, monkeypatch):
     video_tool = ComfyUIVideo()
     RecordingComfyUIClient.workspace = workspace
     RecordingComfyUIClient.instances.clear()
+    RecordingComfyUIClient.missing_nodes = set()
+    RecordingComfyUIClient.missing_models = set()
+    RecordingComfyUIClient.submissions = 0
     monkeypatch.setattr(refmod_module, "ComfyUIClient", RecordingComfyUIClient)
     monkeypatch.setattr(video_module, "ComfyUIClient", RecordingComfyUIClient)
     monkeypatch.setattr(selection_module, "ComfyUIClient", RecordingComfyUIClient, raising=False)
@@ -207,20 +219,38 @@ def _run_pilot(project: Path, workspace: Path, monkeypatch):
         )
 
     refreshed = NarrativeAssets(project)
-    shot_refmods = refreshed.refmods_for_shot("s01-sh01")
+    shot_refmods = refreshed.refmods_for_shot(
+        "s01-sh01", comfyui_workspace=workspace
+    )
     result = video_tool.execute(
         {
-            "prompt": "<Subject 1> crosses <Subject 2> in falling rain.",
+            "prompt": "<Picture 1> crosses <Picture 2> in falling rain.",
             "model_family": "minimax_h3_hyperflow_local",
             "operation": "reference_to_video",
             "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
             "loader": "gguf",
             "refmod_assets": shot_refmods,
             "server_url": SERVER_URL,
+            "comfyui_workspace": str(workspace),
             "seed": 12,
             "output_path": str(project / "assets" / "video" / "s01-sh01-take-01.mp4"),
         }
     )
+    if result.success:
+        take_path = project / "assets" / "video" / "s01-sh01-take-01.mp4"
+        take_path.parent.mkdir(parents=True, exist_ok=True)
+        take_path.write_bytes(b"synthetic-h3-take")
+        refreshed.add_take(
+            "s01-sh01",
+            "take-01",
+            str(take_path.relative_to(project)),
+            3.0,
+            {
+                "source_tool": "comfyui_video",
+                "workflow_provenance": result.data["workflow_provenance"],
+            },
+        )
+        refreshed.select_take("s01-sh01", "take-01")
     return {
         "catalog": NarrativeAssets(project),
         "decision": decision,
@@ -246,8 +276,18 @@ def test_local_h3_pilot_persists_and_applies_project_refmods(tmp_path, monkeypat
         "loc-master",
     ]
     assert [item["prompt_label"] for item in pilot["result"].data["workflow_provenance"]["refmod_assets"]] == [
-        "<Subject 1>",
-        "<Subject 2>",
+        "<Picture 1>",
+        "<Picture 2>",
+    ]
+    manifest = pilot["catalog"].asset_manifest()
+    from schemas.artifacts import validate_artifact
+
+    validate_artifact("asset_manifest", manifest)
+    video = next(asset for asset in manifest["assets"] if asset["type"] == "video")
+    assert video["refmod_asset_ids"] == ["hero-wet", "loc-master"]
+    assert [item["refmod_sha256"] for item in video["refmod_assets"]] == [
+        pilot["catalog"].data["refmod_assets"][asset_id]["refmod_sha256"]
+        for asset_id in ("hero-wet", "loc-master")
     ]
 
 
@@ -259,14 +299,21 @@ def test_stale_source_refmod_blocks_before_batch(tmp_path):
     mod_path.write_bytes(b"cached-mod")
     catalog.register_refmod_asset(
         "hero-wet",
+        project_id="film-a",
         project_path="assets/refmods/hero-wet.safetensors",
         loader_name="openmontage/film-a/hero-wet",
         concept_type="identity",
+        source_sha256=catalog._sha256(
+            project / catalog.data["assets"]["hero-wet"]["path"]
+        ),
         extractor={
             "tool": "comfyui_refmod",
             "node": "MiniMaxH3RefModExtract",
             "workflow_hash_sha256": "c" * 64,
         },
+    )
+    catalog.record_refmod_usage(
+        "project_refmod", route_id="hyperflow_gguf", decision_id="d-001"
     )
     (project / "assets" / "images" / "hero-wet.png").write_bytes(b"updated-approved-sheet")
     batch_calls = []
@@ -337,6 +384,102 @@ def test_hosted_h3_keeps_native_provider_path(tmp_path, monkeypatch):
     assert result.data["hosted"] is True
     assert result.data["workflow_provenance"]["source"] == "comfyui_partner_node"
     assert result.data["workflow_provenance"].get("refmod_asset_ids", []) == []
+
+
+def test_local_h3_refmod_blocks_when_selected_checkpoint_is_missing(
+    tmp_path, monkeypatch
+):
+    from tools.video import comfyui_video as video_module
+
+    workspace = tmp_path / "comfy"
+    workspace.mkdir()
+    RecordingComfyUIClient.workspace = workspace
+    RecordingComfyUIClient.instances.clear()
+    RecordingComfyUIClient.missing_nodes = set()
+    RecordingComfyUIClient.missing_models = {
+        "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf"
+    }
+    RecordingComfyUIClient.submissions = 0
+    monkeypatch.setattr(video_module, "ComfyUIClient", RecordingComfyUIClient)
+    loader_name = "openmontage/film-a/hero-wet"
+    loader_path = workspace / "models" / "refmods" / f"{loader_name}.safetensors"
+    loader_path.parent.mkdir(parents=True)
+    loader_path.write_bytes(b"approved-mod")
+    approved_hash = hashlib.sha256(b"approved-mod").hexdigest()
+
+    result = ComfyUIVideo().execute(
+        {
+            "prompt": "<Picture 1> crosses the room.",
+            "model_family": "minimax_h3_hyperflow_local",
+            "operation": "reference_to_video",
+            "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+            "loader": "gguf",
+            "refmod_assets": [{
+                "asset_id": "hero-wet",
+                "loader_name": loader_name,
+                "concept_type": "identity",
+                "state": "wet",
+                "description": "Courier in a soaked coat",
+                "prompt_label": "<Picture 1>",
+                "refmod_sha256": approved_hash,
+            }],
+            "server_url": SERVER_URL,
+            "comfyui_workspace": str(workspace),
+            "seed": 21,
+            "output_path": str(tmp_path / "missing-stack.mp4"),
+        }
+    )
+
+    assert not result.success
+    assert "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf" in result.error
+    assert RecordingComfyUIClient.submissions == 0
+
+
+def test_local_h3_refmod_blocks_tampered_loader_copy_before_submission(
+    tmp_path, monkeypatch
+):
+    from tools.video import comfyui_video as video_module
+
+    workspace = tmp_path / "comfy"
+    loader_name = "openmontage/film-a/hero-wet"
+    loader_path = workspace / "models" / "refmods" / f"{loader_name}.safetensors"
+    loader_path.parent.mkdir(parents=True)
+    loader_path.write_bytes(b"tampered-loader-mod")
+    expected_hash = hashlib.sha256(b"approved-mod").hexdigest()
+    ref = {
+        "asset_id": "hero-wet",
+        "loader_name": loader_name,
+        "concept_type": "identity",
+        "state": "wet",
+        "description": "Courier in a soaked coat",
+        "prompt_label": "<Picture 1>",
+        "refmod_sha256": expected_hash,
+    }
+    RecordingComfyUIClient.workspace = workspace
+    RecordingComfyUIClient.instances.clear()
+    RecordingComfyUIClient.missing_nodes = set()
+    RecordingComfyUIClient.missing_models = set()
+    RecordingComfyUIClient.submissions = 0
+    monkeypatch.setattr(video_module, "ComfyUIClient", RecordingComfyUIClient)
+
+    result = ComfyUIVideo().execute(
+        {
+            "prompt": "<Picture 1> walks through rain.",
+            "model_family": "minimax_h3_hyperflow_local",
+            "operation": "reference_to_video",
+            "checkpoint_name": "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+            "loader": "gguf",
+            "refmod_assets": [ref],
+            "server_url": SERVER_URL,
+            "comfyui_workspace": str(workspace),
+            "seed": 23,
+            "output_path": str(tmp_path / "tampered.mp4"),
+        }
+    )
+
+    assert not result.success
+    assert "loader copy hash" in result.error.lower()
+    assert RecordingComfyUIClient.submissions == 0
 
 
 def test_refmod_extraction_and_h3_menu_and_batch_use_the_same_comfy_target(

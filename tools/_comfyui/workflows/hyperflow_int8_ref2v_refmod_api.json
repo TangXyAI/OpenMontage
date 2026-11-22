@@ -86,7 +86,7 @@
         0
       ],
       "conditioning": [
-        "refmod_apply_1",
+        "refmod_text_encode_1",
         0
       ]
     }
@@ -218,23 +218,24 @@
       "copies_8": 1
     }
   },
-  "refmod_apply_1": {
-    "class_type": "MiniMaxH3RefModApply",
+  "refmod_text_encode_1": {
+    "class_type": "MiniMaxH3RefModTextEncode",
     "inputs": {
-      "conditioning": [
-        "5",
+      "clip": [
+        "2",
         0
       ],
       "mods": [
         "refmod_loader_1",
         0
       ],
-      "override": false,
-      "retention": 1.0,
-      "curve_direction": "constant",
-      "scramble_seed": -1,
-      "curve_shape": "linear",
-      "curve_value": 1.0
+      "prompt": "",
+      "reference_fps": 24.0,
+      "max_total_tokens": 0,
+      "vae": [
+        "3",
+        0
+      ]
     }
   }
 }

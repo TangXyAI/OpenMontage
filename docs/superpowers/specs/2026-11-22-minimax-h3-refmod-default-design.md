@@ -59,8 +59,8 @@ The user selected approach 1 because they want project-specific automatic extrac
 3. Extract each Mod using the installed H3 RefMod nodes. Use a project-specific safe name and a stable `concept_type` (`identity`, `clothing`, `background`, or `generic` as appropriate). Never select an existing global Mod merely because its filename resembles the entity name.
 4. Store the canonical `.safetensors` file under `projects/<project_id>/assets/refmods/`. Place or mirror a loader-visible copy under `models/refmods/openmontage/<project_id>/`; treat that copy as a rebuildable runtime cache. Never overwrite another project's Mod or the existing `测试人001` file.
 5. Record a `metadata.refmod_assets` map in the asset manifest, keyed by source `asset_id`. Each entry records the project path, loader name, entity ID, state, concept type, source asset IDs/paths, source hashes, RefMod file hash, and extractor/model provenance.
-6. For each H3 shot, pass only the Mods for the shot's referenced reusable assets. The workflow applies them to Ref2VA conditioning. The prompt compiler emits subject labels in the same deterministic order as the loaded visual Mods.
-7. Apply RefMods only to H3 Ref2VA workflows. Keep exact first/last-frame shots on native FL2VA, and keep one-off motion/video references as ordinary Ref2VA inputs. When a shot combines a RefMod with a native Ref2VA reference, the compiler owns one unified ordering so `<Subject N>` / `<Picture N>` labels cannot drift.
+6. For each H3 shot, pass only the Mods for the shot's referenced reusable assets. The installed `MiniMaxH3RefModTextEncode` maps the loaded Mod order to the prompt labels. Extract static approved project images with `image_refs="separate"`, so they are image-kind Mods addressed as `<Picture N>`.
+7. Apply RefMods only to H3 Ref2VA workflows. Keep exact first/last-frame shots on native FL2VA, and keep one-off motion/video references as ordinary Ref2VA inputs. The installed Text Encode node accepts one RefMod bundle and cannot combine it with separate native image/video/audio reference inputs. If a shot requests both, block before submission and ask which supported Ref2VA path to keep; never drop one input or claim a unified mapping.
 8. Existing projects stay unchanged until their user explicitly regenerates or opts in newly planned shots. Non-local H3 routes remain on their approved native provider path.
 
 ## Gates and Failure Behavior
@@ -68,7 +68,9 @@ The user selected approach 1 because they want project-specific automatic extrac
 - RefMod extraction runs only after the source asset sheets are approved.
 - The existing model-selection gate remains authoritative. RefMod does not silently switch a hosted H3 route to local ComfyUI.
 - If a shot requires both project RefMod conditioning and exact first/last-frame FL2VA conditioning, surface the incompatibility and ask which approved behavior to keep; do not silently change the operation.
+- If a shot requests project RefMods together with a native Ref2VA reference, surface the installed Text Encode limitation and ask which reference path to keep; do not silently drop or combine inputs.
 - Before the first extraction, validate that the selected ComfyUI server exposes the required H3 and RefMod nodes and models. Do not trust the stale 8188 node cache when the selected server is 8290.
+- Validate the actual selected server's node input sockets against the extraction and application workflow contracts before extraction or batching.
 - If the RefMod pack, H3 VAE/model stack, or live node validation is unavailable, mark the RefMod path blocked and surface the appropriate native H3 path for explicit user choice (FL2VA for exact first/last frames, Ref2VA for ordinary references). Do not silently fall back after RefMod was selected.
 - If an approved source image, asset state, or project mapping changes, regenerate only the affected Mod and update its hash/provenance before the next batch.
 
@@ -99,12 +101,12 @@ Generated video assets continue to be recorded as the selected H3 takes. RefMod 
 ## Risks and Mitigations
 
 - **Global model-folder collisions:** use a project-specific loader namespace and retain the canonical file under the project workspace.
-- **Reference-index mistakes:** generate one deterministic ordering shared by loader bindings and prompt tags; test mixed Mod/native-reference cases.
+- **Reference-index mistakes:** use the Text Encode node's actual Mod-to-label map, extract static images as separate image-kind Mods, and reject mixed native/Mod graphs before submission.
 - **State bleed:** key Mod mapping by source asset/state, and pass only the current shot's state variant.
 - **ComfyUI endpoint mismatch:** refresh and validate the live node schema at the selected server URL before any workflow call.
 - **Third-party node changes:** record node/version and workflow hash in provenance; fail before the batch if the live contract differs.
 - **Task-family conflict:** RefMod is limited to Ref2VA; preserve exact keyframes with FL2VA and ask when a shot requires both behaviors.
-- **Over-conditioning one-off motion:** preserve normal Ref2VA references for motion/video and apply Mods only to reusable concepts.
+- **Over-conditioning one-off motion:** preserve normal Ref2VA references for motion/video and apply Mods only to reusable concepts. The installed Text Encode route cannot combine them in one shot, so mixed requests need an explicit per-shot choice.
 
 ## Builder-Owned Details
 

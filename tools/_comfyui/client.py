@@ -234,13 +234,49 @@ class ComfyUIClient:
     def has_node(self, node_class: str) -> bool:
         """Return whether the connected server exposes a node class."""
         try:
+            self.get_node_info(node_class)
+            return True
+        except Exception:
+            return False
+
+    def get_node_info(self, node_class: str) -> dict[str, Any]:
+        """Return one live node schema from the selected ComfyUI server."""
+        if not isinstance(node_class, str) or not node_class.strip():
+            raise ComfyUIError("ComfyUI node class must be a non-empty string")
+        try:
             response = requests.get(
                 f"{self.server_url}/object_info/{node_class}", timeout=10
             )
             response.raise_for_status()
-            return node_class in response.json()
-        except Exception:
-            return False
+            data = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise ComfyUIError(
+                f"Could not inspect node {node_class} on selected ComfyUI server "
+                f"{self.server_url}: {exc}"
+            ) from exc
+        info = data.get(node_class) if isinstance(data, dict) else None
+        if not isinstance(info, dict):
+            raise ComfyUIError(
+                f"ComfyUI server {self.server_url} does not expose node {node_class}"
+            )
+        return info
+
+    def check_node_inputs(
+        self, node_class: str, required_inputs: set[str] | list[str] | tuple[str, ...]
+    ) -> list[str]:
+        """Return workflow sockets absent from the selected server's node schema."""
+        info = self.get_node_info(node_class)
+        inputs = info.get("input", {})
+        if not isinstance(inputs, dict):
+            raise ComfyUIError(
+                f"ComfyUI node {node_class} returned an invalid input contract"
+            )
+        available: set[str] = set()
+        for section in ("required", "optional"):
+            value = inputs.get(section, {})
+            if isinstance(value, dict):
+                available.update(value)
+        return sorted(set(required_inputs) - available)
 
     # ------------------------------------------------------------------
     # Core cycle

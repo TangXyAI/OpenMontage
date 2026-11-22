@@ -144,9 +144,11 @@ class NarrativeAssets:
         self,
         asset_id: str,
         *,
+        project_id: str,
         project_path: str,
         loader_name: str,
         concept_type: str,
+        source_sha256: str,
         extractor: Mapping[str, Any],
     ) -> None:
         """Record a project Mod and the approved visual asset it conditions."""
@@ -178,13 +180,27 @@ class NarrativeAssets:
                 or any(not isinstance(item, Mapping) for item in extractor["model_stack"])):
             raise ValueError("RefMod extractor model_stack must be a list of mappings")
 
+        if not isinstance(project_id, str) or not project_id.strip():
+            raise ValueError("RefMod registration needs project_id")
+        if not isinstance(source_sha256, str) or len(source_sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in source_sha256
+        ):
+            raise ValueError("RefMod source_sha256 must be a lowercase SHA-256 digest")
+
         normalized_loader = str(loader_name).replace("\\", "/")
         loader_parts = PurePosixPath(normalized_loader).parts
         if (len(loader_parts) < 3 or loader_parts[0] != "openmontage"
                 or any(part in {".", ".."} for part in loader_parts)):
             raise ValueError("RefMod loader name must stay under openmontage/<project_id>/")
+        if loader_parts[1] != project_id:
+            raise ValueError(
+                "RefMod loader namespace does not match project_id"
+            )
 
         source_path = self._media(asset["path"])
+        actual_source_sha256 = self._sha256(self.root / source_path)
+        if actual_source_sha256 != source_sha256:
+            raise ValueError("Approved source changed during RefMod extraction")
         mod_path = self._media(project_path)
         if not mod_path.replace("\\", "/").startswith("assets/refmods/"):
             raise ValueError("RefMod project path must be under assets/refmods/")
@@ -192,13 +208,14 @@ class NarrativeAssets:
             raise ValueError("RefMod project asset must use the .safetensors extension")
 
         record = {
+            "project_id": project_id,
             "entity_id": str(asset.get("entity_id") or asset_id),
             "state": str(asset.get("state") or "default"),
             "concept_type": concept_type,
             "project_path": mod_path,
             "loader_name": normalized_loader,
             "source_path": source_path,
-            "source_sha256": self._sha256(self.root / source_path),
+            "source_sha256": source_sha256,
             "refmod_sha256": self._sha256(self.root / mod_path),
             "status": "ready",
             "extractor": dict(extractor),
@@ -228,41 +245,100 @@ class NarrativeAssets:
             mod_path = self._media(record["project_path"])
         except (KeyError, TypeError, ValueError):
             return False
+        expected_entity_id = str(asset.get("entity_id") or asset_id)
+        expected_state = str(asset.get("state") or "default")
+        project_id = record.get("project_id")
+        loader_parts = PurePosixPath(
+            str(record.get("loader_name", "")).replace("\\", "/")
+        ).parts
         return (
             source_path == record.get("source_path")
+            and expected_entity_id == record.get("entity_id")
+            and expected_state == record.get("state")
+            and (
+                not project_id
+                or (
+                    len(loader_parts) >= 3
+                    and loader_parts[0] == "openmontage"
+                    and loader_parts[1] == project_id
+                )
+            )
             and self._sha256(self.root / source_path) == record.get("source_sha256")
             and self._sha256(self.root / mod_path) == record.get("refmod_sha256")
         )
 
-    def refmods_for_shot(self, shot_id: str) -> list[dict[str, Any]]:
+    def _loader_copy_is_current(
+        self, record: Mapping[str, Any], comfyui_workspace: str | Path
+    ) -> bool:
+        workspace = Path(comfyui_workspace).resolve()
+        model_root = (workspace / "models" / "refmods").resolve()
+        loader_name = str(record.get("loader_name", "")).replace("\\", "/")
+        loader_path = (model_root / f"{loader_name}.safetensors").resolve()
+        try:
+            if not loader_path.is_relative_to(model_root):
+                return False
+            return (
+                loader_path.is_file()
+                and self._sha256(loader_path) == record.get("refmod_sha256")
+            )
+        except (OSError, ValueError):
+            return False
+
+    def refmods_for_shot(
+        self,
+        shot_id: str,
+        *,
+        comfyui_workspace: str | Path | None = None,
+    ) -> list[dict[str, Any]]:
         """Return current RefMods for linked assets in deterministic prompt order."""
         shot = self.data["shots"].get(shot_id)
         if not isinstance(shot, Mapping):
             raise ValueError(f"Unknown shot: {shot_id}")
+        usage_mode = self.data.get("refmod_usage", {}).get("mode")
+        if usage_mode == "native_ref2va":
+            return []
+        strict_project_mode = usage_mode == "project_refmod"
         refmod_assets = self.data.get("refmod_assets", {})
         records = []
         stale_asset_ids = []
+        missing_asset_ids = []
         for asset_id in sorted(set(shot.get("asset_ids", []))):
+            asset = self.data.get("assets", {}).get(asset_id)
+            if not isinstance(asset, Mapping) or asset.get("kind") not in {
+                "character", "location", "prop"
+            }:
+                continue
             record = refmod_assets.get(asset_id)
             if not isinstance(record, Mapping):
+                if strict_project_mode:
+                    missing_asset_ids.append(asset_id)
                 continue
-            if not self._refmod_is_current(asset_id, record):
+            if (
+                not self._refmod_is_current(asset_id, record)
+                or (
+                    comfyui_workspace is not None
+                    and not self._loader_copy_is_current(record, comfyui_workspace)
+                )
+            ):
                 stale_asset_ids.append(asset_id)
                 continue
-            if isinstance(record, Mapping):
-                asset = self.data["assets"][asset_id]
-                records.append({
-                    "asset_id": asset_id,
-                    "description": asset.get("description", ""),
-                    **record,
-                })
-        if stale_asset_ids:
+            records.append({
+                "asset_id": asset_id,
+                "description": asset.get("description", ""),
+                **record,
+            })
+        if stale_asset_ids and strict_project_mode:
             raise ValueError(
                 "stale RefMod for linked approved assets in shot "
                 f"{shot_id}: {', '.join(stale_asset_ids)}; re-extract before batching"
             )
+        if missing_asset_ids and strict_project_mode:
+            raise ValueError(
+                "missing RefMod for linked approved assets in shot "
+                f"{shot_id}: {', '.join(missing_asset_ids)}; extract before batching"
+            )
         return [
-            {**record, "prompt_label": f"<Subject {index}>"}
+            {**record, "prompt_label": f"<Picture {index}>"}
             for index, record in enumerate(records, start=1)
         ]
 
@@ -359,6 +435,28 @@ class NarrativeAssets:
                 for key in ("seed", "prompt", "model", "provider"):
                     if key in take["metadata"]:
                         item[key] = take["metadata"][key]
+                workflow_provenance = take.get("metadata", {}).get("workflow_provenance")
+                if isinstance(workflow_provenance, Mapping):
+                    bindings = workflow_provenance.get("refmod_assets")
+                    asset_ids = workflow_provenance.get("refmod_asset_ids")
+                    if isinstance(bindings, list) and bindings:
+                        binding_ids = [
+                            str(binding.get("asset_id"))
+                            for binding in bindings
+                            if isinstance(binding, Mapping)
+                        ]
+                        if len(binding_ids) != len(bindings):
+                            raise ValueError(
+                                f"Selected take {shot_id}/{take_id} has malformed RefMod provenance"
+                            )
+                        if asset_ids is None:
+                            asset_ids = binding_ids
+                        if asset_ids != binding_ids:
+                            raise ValueError(
+                                f"Selected take {shot_id}/{take_id} RefMod IDs do not match binding order"
+                            )
+                        item["refmod_asset_ids"] = list(asset_ids)
+                        item["refmod_assets"] = [dict(binding) for binding in bindings]
                 if "enhancement" in take.get("metadata", {}):
                     item["enhancement"] = take["metadata"]["enhancement"]
                 assets.append(item)

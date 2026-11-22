@@ -11,6 +11,7 @@ def _manifest_with_refmod():
         "metadata": {
             "refmod_assets": {
                 "hero-wet": {
+                    "project_id": "film",
                     "entity_id": "hero",
                     "state": "wet",
                     "concept_type": "identity",

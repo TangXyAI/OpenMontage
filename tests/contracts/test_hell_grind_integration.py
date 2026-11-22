@@ -63,7 +63,7 @@ def test_refmod_stage_uses_server_info_and_shared_workspace_contract():
         "server_info",
         "workspace.path",
         "server_url",
-        "same selected `server_url`",
+        "same descriptors, selected `server_url`",
         "stale RefMod",
     ):
         assert phrase in asset_text
@@ -74,11 +74,16 @@ def test_h3_skill_and_narrative_guide_preserve_refmod_route_boundaries():
     h3_skill = (root / ".agents/skills/minimax-h3/SKILL.md").read_text(
         encoding="utf-8"
     )
+    hyperflow_skill = (root / ".agents/skills/hyperflow-h3/SKILL.md").read_text(
+        encoding="utf-8"
+    )
     narrative_guide = (root / "docs/narrative-production.md").read_text(
         encoding="utf-8"
     )
 
     assert "Project-scoped RefMods" in h3_skill
     assert "first_last_frame_to_video" in h3_skill
+    assert "MiniMaxH3RefModTextEncode" in hyperflow_skill
+    assert "does not accept separate native video references" in hyperflow_skill
     assert "reference_conditioning_selection" in narrative_guide
     assert "stale source or Mod blocks" in narrative_guide

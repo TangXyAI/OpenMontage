@@ -115,7 +115,7 @@ def test_compose_rejects_review_for_pre_enhancement_path(tmp_path):
     _write_media(root, "assets/video/enhanced/take-a.mp4")
     catalog.apply_enhancement(
         "s01-sh01", "take-a", "assets/video/enhanced/take-a.mp4", duration_seconds=4.0,
-        enhancement={"operation": "video_upscale", "model": "Upscaler", "source_path": "assets/video/take-a.mp4"},
+        enhancement={"operation": "relayvsr", "model": "RelayVSR", "source_path": "assets/video/take-a.mp4"},
     )
 
     result = _compose_result(root, old_manifest, old_edit)

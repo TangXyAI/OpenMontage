@@ -36,18 +36,25 @@ first/last-frame graphs are available locally.
 For approved reusable character/state, location, and prop assets in the
 narrative Cinematic pipeline, local H3 uses project-scoped RefMods by default.
 Only enter this path after both the asset-sheet and local model-selection gates
-are approved. Extract each approved asset/state with `comfyui_refmod`, keep its
+are approved, and only for `reference_to_video` / Ref2VA shots. Existing
+projects with approved asset takes and no explicit `project_refmod` opt-in keep
+their current native route. An FL2VA-only project performs no RefMod extraction.
+Extract each approved asset/state with `comfyui_refmod`, keep its
 project copy and loader mapping in `NarrativeAssets`, then pass only the shot's
 current `catalog.refmods_for_shot(shot_id)` rows to `comfyui_video` as
 `refmod_assets`. Use each row's `prompt_label` and descriptor in the prompt in
-the same order as the loader rows.
+the same order as the Text Encode reference map. Visual RefMods use the node's
+numbered `<Picture N>` labels; do not substitute a free-form `<Subject N>` token.
 
 RefMods apply only to local H3 `reference_to_video` / Ref2VA graphs. They may be
-used without native still images, and ordinary one-off image or motion
-references can remain alongside them. Never send local RefMods to hosted H3 or
-other provider routes. Exact `first_last_frame_to_video` is FL2VA and cannot
-receive RefMods; if a shot requires both, stop and ask which approved behavior
-to keep. A stale source or Mod blocks the batch until that asset/state is
+used without native still images. The installed Text Encode node does not accept
+separate native video references; for a mixed shot, preserve the motion
+reference through native Ref2VA or ask the user to prioritize the Mod. Never
+silently drop either reference or claim an unsupported combined map. Never send
+local RefMods to hosted H3 or other provider routes. Exact
+`first_last_frame_to_video` is FL2VA and cannot receive RefMods; if a shot
+requires both, stop and ask which approved behavior to keep. A stale source or
+Mod blocks the batch until that asset/state is
 re-extracted. Use one explicit `server_url` for the H3 readiness menu,
 extraction, and generation; pass the selected ComfyUI `workspace.path` to
 extraction and block when that workspace is not local/shared. If live

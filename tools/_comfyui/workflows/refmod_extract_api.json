@@ -40,7 +40,7 @@
       "description": "",
       "save": true,
       "budget_policy": "truncate",
-      "image_refs": "stack"
+      "image_refs": "separate"
     }
   }
 }

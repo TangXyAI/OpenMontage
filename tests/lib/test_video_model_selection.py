@@ -162,6 +162,15 @@ def test_video_menu_uses_explicit_server_for_local_h3_only(monkeypatch):
         def is_available(self):
             return True
 
+        def has_node(self, _node_class):
+            return True
+
+        def check_models(self, required):
+            return list(required), []
+
+        def check_node_inputs(self, _node_class, _required_inputs):
+            return []
+
     monkeypatch.setattr(module, "ComfyUIClient", SelectedServer, raising=False)
 
     menu = build_menu(FakeRegistry("unavailable"), server_url="http://127.0.0.1:8290")
@@ -171,6 +180,70 @@ def test_video_menu_uses_explicit_server_for_local_h3_only(monkeypatch):
     assert routes["hyperflow_int8"]["available"] is True
     assert routes["comfyui_h3_api"]["available"] is False
     assert seen == [("http://127.0.0.1:8290", "video")]
+
+
+def test_video_menu_blocks_local_routes_when_selected_server_lacks_stack(monkeypatch):
+    import lib.video_model_selection as module
+
+    class IncompleteServer:
+        def __init__(self, server_url=None, capability=None):
+            self.server_url = server_url
+            self.capability = capability
+
+        def is_available(self):
+            return True
+
+        def has_node(self, node_class):
+            return node_class != "MiniMaxH3RefModTextEncode"
+
+        def check_models(self, required):
+            return [], list(required)
+
+        def check_node_inputs(self, _node_class, _required_inputs):
+            return []
+
+    monkeypatch.setattr(module, "ComfyUIClient", IncompleteServer)
+
+    menu = build_menu(FakeRegistry("available"), server_url="http://127.0.0.1:8290")
+    routes = {item["route_id"]: item for item in menu}
+
+    assert routes["h3_local"]["available"] is False
+    assert routes["hyperflow_gguf"]["available"] is False
+    assert routes["hyperflow_int8"]["available"] is False
+    assert "MiniMaxH3RefModTextEncode" in routes["hyperflow_int8"]["setup"]
+    assert routes["comfyui_h3_api"]["available"] is True
+
+
+def test_video_menu_blocks_local_routes_when_refmod_input_contract_is_missing(
+    monkeypatch,
+):
+    import lib.video_model_selection as module
+
+    class MissingRefModSocketServer:
+        def __init__(self, server_url=None, capability=None):
+            self.server_url = server_url
+            self.capability = capability
+
+        def is_available(self):
+            return True
+
+        def has_node(self, _node_class):
+            return True
+
+        def check_models(self, required):
+            return list(required), []
+
+        def check_node_inputs(self, node_class, _required_inputs):
+            return ["mods"] if node_class == "MiniMaxH3RefModTextEncode" else []
+
+    monkeypatch.setattr(module, "ComfyUIClient", MissingRefModSocketServer)
+
+    menu = build_menu(FakeRegistry("available"), server_url="http://127.0.0.1:8290")
+    routes = {item["route_id"]: item for item in menu}
+
+    assert routes["h3_local"]["available"] is False
+    assert "MiniMaxH3RefModTextEncode" in routes["h3_local"]["setup"]
+    assert "mods" in routes["h3_local"]["setup"]
 
 
 def test_require_selected_route_raises_without_approval():

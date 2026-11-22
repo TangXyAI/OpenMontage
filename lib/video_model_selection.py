@@ -20,6 +20,8 @@ from typing import Any, Literal
 
 import jsonschema
 from tools._comfyui.client import ComfyUIClient
+from tools._comfyui.h3_contracts import LOCAL_H3_ROUTE_NODE_INPUT_REQUIREMENTS
+from tools._comfyui.metadata import BUNDLED_MODEL_STACKS
 
 SCHEMA_PATH = (
     Path(__file__).resolve().parents[1]
@@ -33,6 +35,66 @@ DECISION_SUBJECT = "Video model and route"
 REFERENCE_CONDITIONING_CATEGORY = "reference_conditioning_selection"
 REFERENCE_CONDITIONING_SUBJECT = "MiniMax H3 reusable-asset conditioning"
 _LOCAL_H3_ROUTE_IDS = frozenset({"hyperflow_gguf", "hyperflow_int8", "h3_local"})
+_LOCAL_H3_NODE_REQUIREMENTS = {
+    "h3_local": (
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ReferenceToVideo",
+        "MiniMaxH3RefModsLoader",
+        "MiniMaxH3RefModTextEncode",
+        "MiniMaxH3RefModExtract",
+        "LoadImage",
+        "VAELoader",
+        "BasicGuider",
+    ),
+    "hyperflow_gguf": (
+        "HyperFlowGGUFLoader",
+        "HyperFlowSigmas",
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ReferenceToVideo",
+        "MiniMaxH3RefModsLoader",
+        "MiniMaxH3RefModTextEncode",
+        "MiniMaxH3RefModExtract",
+        "LoadImage",
+        "VAELoader",
+        "BasicGuider",
+    ),
+    "hyperflow_int8": (
+        "HyperFlowINT8Loader",
+        "HyperFlowSigmas",
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ReferenceToVideo",
+        "MiniMaxH3RefModsLoader",
+        "MiniMaxH3RefModTextEncode",
+        "MiniMaxH3RefModExtract",
+        "LoadImage",
+        "VAELoader",
+        "BasicGuider",
+    ),
+}
+
+
+def _local_h3_model_requirements(route_id: str) -> tuple[str, ...]:
+    local_stack = BUNDLED_MODEL_STACKS["minimax-h3-local"]
+    hyperflow_stack = BUNDLED_MODEL_STACKS["minimax-h3-hyperflow-local"]
+    common = tuple(
+        item["name"]
+        for item in hyperflow_stack
+        if item.get("role") in {"text_encoder", "video_vae", "audio_vae"}
+    )
+    if route_id == "h3_local":
+        return tuple(item["name"] for item in local_stack)
+    checkpoints = {
+        "hyperflow_gguf": (
+            "minimax_h3_fl2va_hyperflow_flash_14b-Q4_K_M.gguf",
+            "minimax_h3_ref2va_hyperflow_flash_14b-Q4_K_M.gguf",
+        ),
+        "hyperflow_int8": (
+            "minimax_h3_fl2va_hyperflow_flash_14b-int8_convrot.safetensors",
+            "minimax_h3_ref2va_hyperflow_flash_14b-int8_convrot.safetensors",
+            "minimax_h3_sol_vae_int8_convrot.safetensors",
+        ),
+    }
+    return (*common, *checkpoints.get(route_id, ()))
 
 _OPERATIONS_TEXT_IMAGE = ("text_to_video", "image_to_video")
 _OPERATIONS_HYPERFLOW = (
@@ -316,6 +378,7 @@ def build_menu(
     tools = getattr(registry, "_tools", {}) or {}
     selected_server_available: bool | None = None
     selected_server_setup: str | None = None
+    selected_server_routes: dict[str, dict[str, Any]] = {}
     if server_url:
         try:
             selected_client = ComfyUIClient(
@@ -324,6 +387,65 @@ def build_menu(
             selected_server_available = selected_client.is_available()
             if not selected_server_available:
                 selected_server_setup = selected_client.unavailable_reason()
+            else:
+                required_models = sorted(
+                    {
+                        model
+                        for route_id in _LOCAL_H3_ROUTE_IDS
+                        for model in _local_h3_model_requirements(route_id)
+                    }
+                )
+                _, missing_models = selected_client.check_models(required_models)
+                missing_model_set = set(missing_models)
+                required_nodes = sorted(
+                    {
+                        node
+                        for nodes in _LOCAL_H3_NODE_REQUIREMENTS.values()
+                        for node in nodes
+                    }
+                )
+                node_ready = {
+                    node: selected_client.has_node(node) for node in required_nodes
+                }
+                node_missing_inputs = {}
+                for node, required_inputs in LOCAL_H3_ROUTE_NODE_INPUT_REQUIREMENTS.items():
+                    if node not in node_ready or not node_ready[node]:
+                        continue
+                    missing_inputs = selected_client.check_node_inputs(
+                        node, required_inputs
+                    )
+                    if missing_inputs:
+                        node_missing_inputs[node] = missing_inputs
+                for route_id in _LOCAL_H3_ROUTE_IDS:
+                    route_missing_models = [
+                        model
+                        for model in _local_h3_model_requirements(route_id)
+                        if model in missing_model_set
+                    ]
+                    route_missing_nodes = [
+                        node
+                        for node in _LOCAL_H3_NODE_REQUIREMENTS[route_id]
+                        if not node_ready[node]
+                    ]
+                    route_missing_inputs = [
+                        f"{node} ({', '.join(node_missing_inputs[node])})"
+                        for node in _LOCAL_H3_NODE_REQUIREMENTS[route_id]
+                        if node in node_missing_inputs
+                    ]
+                    blockers = []
+                    if route_missing_nodes:
+                        blockers.append("missing ComfyUI nodes: " + ", ".join(route_missing_nodes))
+                    if route_missing_inputs:
+                        blockers.append(
+                            "incompatible ComfyUI node inputs: "
+                            + ", ".join(route_missing_inputs)
+                        )
+                    if route_missing_models:
+                        blockers.append("missing models: " + ", ".join(route_missing_models))
+                    selected_server_routes[route_id] = {
+                        "ready": not blockers,
+                        "setup": "; ".join(blockers) or None,
+                    }
         except Exception as exc:
             selected_server_available = False
             selected_server_setup = f"Could not inspect ComfyUI server {server_url}: {exc}"
@@ -334,7 +456,12 @@ def build_menu(
         status = _tool_status(tool)
         tool_available = status == "available"
         if server_url and route.route_id in _LOCAL_H3_ROUTE_IDS:
-            tool_available = bool(selected_server_available and tool is not None)
+            selected_route_ready = selected_server_routes.get(route.route_id, {})
+            tool_available = bool(
+                selected_server_available
+                and selected_route_ready.get("ready")
+                and tool is not None
+            )
             status = "available" if tool_available else "unavailable"
         available = tool_available
         variant = _LOCAL_VARIANT_ROUTES.get(route.route_id)
@@ -352,7 +479,12 @@ def build_menu(
             if not variant_state.get("ready"):
                 setup_parts.append(_variant_setup(variant_state))
             if not tool_available:
-                tool_hint = selected_server_setup if server_url else None
+                tool_hint = (
+                    selected_server_routes.get(route.route_id, {}).get("setup")
+                    or selected_server_setup
+                    if server_url
+                    else None
+                )
                 tool_hint = tool_hint or _tool_setup(tool) or (
                     "ComfyUI video tool is not registered; run registry.discover()"
                 )
@@ -364,7 +496,8 @@ def build_menu(
                 setup = None
             elif server_url and route.route_id in _LOCAL_H3_ROUTE_IDS:
                 setup = (
-                    selected_server_setup
+                    selected_server_routes.get(route.route_id, {}).get("setup")
+                    or selected_server_setup
                     or _tool_setup(tool)
                     or f"ComfyUI video tool is not registered for {server_url}"
                 )

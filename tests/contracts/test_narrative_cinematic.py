@@ -86,3 +86,18 @@ def test_refmod_is_available_after_existing_narrative_approval_gates():
     ) < narrative_section.index("comfyui_refmod") < batch_step
     assert "first_last_frame_to_video" in narrative_section
     assert "native_ref2va" in narrative_section
+
+
+def test_refmod_default_requires_existing_project_opt_in_and_ref2va_shots():
+    root = Path(__file__).resolve().parents[2]
+    asset_director = (
+        root / "skills/pipelines/cinematic/asset-director.md"
+    ).read_text(encoding="utf-8")
+    narrative_section = asset_director[
+        asset_director.index("## Narrative Asset Pipeline") :
+    ]
+
+    assert "existing project" in narrative_section.lower()
+    assert "explicit opt-in" in narrative_section.lower()
+    assert "reference_to_video" in narrative_section
+    assert "FL2VA-only" in narrative_section

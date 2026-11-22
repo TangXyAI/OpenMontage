@@ -113,7 +113,11 @@ The decision log records `reference_conditioning_selection` with subject
 `MiniMax H3 reusable-asset conditioning`; the approved asset manifest records
 the same decision id and whether the project chose `project_refmod` or
 `native_ref2va`. A stale source or Mod blocks the local batch until it is
-re-extracted. RefMods are local H3 Ref2VA conditioning only: hosted H3 routes
-keep their native provider references, one-off motion references remain native,
-and exact FL2VA first/last frames never receive RefMod bindings. A shot that
-requires both RefMods and exact FL2VA frames needs an explicit user choice.
+re-extracted. The local H3 Text Encode node maps ordered visual Mods to
+`<Picture N>` labels; the loader supports up to eight mapped Mod slots per
+shot. RefMods are local H3 Ref2VA conditioning only: hosted H3 routes keep their
+native provider references, and exact FL2VA first/last frames never receive
+RefMod bindings. The installed Text Encode path cannot combine project RefMods
+with separate native still/video inputs; ask which approved reference path to
+keep for a mixed shot. A shot that requires both RefMods and exact FL2VA frames
+also needs an explicit user choice.

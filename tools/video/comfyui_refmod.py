@@ -6,12 +6,17 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
 from lib.narrative_assets import NarrativeAssets
 from tools._comfyui.client import ComfyUIClient, ComfyUIError
+from tools._comfyui.h3_contracts import (
+    REFMOD_EXTRACTION_NODE_INPUT_REQUIREMENTS,
+    REFMOD_VIDEO_NODE_INPUT_REQUIREMENTS,
+)
 from tools._comfyui.metadata import COMFYUI_SETUP_OFFER, workflow_hash
 from tools.base_tool import (
     BaseTool,
@@ -77,6 +82,7 @@ def derive_refmod_paths(
     comfyui_workspace: str | Path,
     project_id: str,
     asset_id: str,
+    entity_id: str,
     state: str,
     source_sha256: str,
     concept_type: str,
@@ -95,10 +101,12 @@ def derive_refmod_paths(
 
     project_segment = _safe_segment(project_id, "project_id", strict=True)
     asset_segment = _safe_segment(asset_id, "asset_id")
+    entity_segment = _safe_segment(entity_id, "entity_id", strict=True)
     state_segment = _safe_segment(state or "default", "state")
     settings = json.dumps(
         {
             "concept_type": concept_type,
+            "entity_id": entity_segment,
             "video_vae_name": video_vae_name,
             "refmod_extension_version": refmod_extension_version,
             "mode": _REFMOD_MODE,
@@ -114,7 +122,7 @@ def derive_refmod_paths(
     workspace_root = Path(comfyui_workspace).resolve()
     project_path = (project_root / "assets" / "refmods" / filename).resolve()
     model_library_root = (workspace_root / "models" / "refmods").resolve()
-    model_library_path = (model_library_root / PurePosixPath(loader_name)).with_suffix(".safetensors").resolve()
+    model_library_path = (model_library_root / f"{loader_name}.safetensors").resolve()
     if not project_path.is_relative_to(project_root):
         raise ValueError("RefMod project path would leave the project directory")
     if not model_library_path.is_relative_to(model_library_root):
@@ -122,6 +130,8 @@ def derive_refmod_paths(
     return {
         "project_path": project_path,
         "loader_name": loader_name,
+        "project_id": project_segment,
+        "entity_id": entity_segment,
         "model_library_path": model_library_path,
         "model_library_root": model_library_root,
         "source_sha256": source_sha256,
@@ -241,10 +251,16 @@ class ComfyUIRefMod(BaseTool):
         record = catalog.data.get("refmod_assets", {}).get(asset_id)
         if not isinstance(record, dict):
             return False
+        asset = catalog.data.get("assets", {}).get(asset_id)
+        if not isinstance(asset, dict):
+            return False
         if (record.get("project_path") != str(paths["project_path"].relative_to(catalog.root))
                 or record.get("loader_name") != paths["loader_name"]
                 or record.get("source_sha256") != paths["source_sha256"]
-                or record.get("concept_type") != concept_type):
+                or record.get("concept_type") != concept_type
+                or record.get("entity_id") != str(asset.get("entity_id") or asset_id)
+                or record.get("state") != str(asset.get("state") or "default")
+                or record.get("project_id") not in (None, paths["project_id"])):
             return False
         model_stack = record.get("extractor", {}).get("model_stack", [])
         extension_version = ComfyUIRefMod._refmod_extension_version_from_record(record)
@@ -254,14 +270,15 @@ class ComfyUIRefMod(BaseTool):
                    for item in model_stack if isinstance(item, dict)):
             return False
         canonical, loader_copy = paths["project_path"], paths["model_library_path"]
-        if not canonical.is_file() or not loader_copy.is_file():
+        if not canonical.is_file():
             return False
         recorded_hash = record.get("refmod_sha256")
-        return bool(
-            recorded_hash
-            and _sha256_file(canonical) == recorded_hash
-            and _sha256_file(loader_copy) == recorded_hash
-        )
+        if not recorded_hash or _sha256_file(canonical) != recorded_hash:
+            return False
+        if not loader_copy.is_file() or _sha256_file(loader_copy) != recorded_hash:
+            loader_copy.parent.mkdir(parents=True, exist_ok=True)
+            _copy_file_atomic(canonical, loader_copy)
+        return _sha256_file(loader_copy) == recorded_hash
 
     @staticmethod
     def _refmod_extension_version_from_record(record: dict[str, Any]) -> str:
@@ -295,21 +312,82 @@ class ComfyUIRefMod(BaseTool):
                 return ToolResult(success=False, error=f"RefMod source path does not match approved asset {asset_id}")
 
             source = (project_root / approved_path).resolve()
-            source_sha256 = _sha256_file(source)
+            source_bytes = source.read_bytes()
+            source_sha256 = hashlib.sha256(source_bytes).hexdigest()
             extension_version = _refmod_extension_version(workspace)
             paths = derive_refmod_paths(
                 project_dir=project_root,
                 comfyui_workspace=workspace,
                 project_id=inputs["project_id"],
                 asset_id=asset_id,
+                entity_id=str(asset.get("entity_id") or asset_id),
                 state=str(asset.get("state") or "default"),
                 source_sha256=source_sha256,
                 concept_type=inputs["concept_type"],
                 video_vae_name=inputs["video_vae_name"],
                 refmod_extension_version=extension_version,
             )
-            if self._cache_matches(catalog, asset_id, paths, inputs["concept_type"], inputs["video_vae_name"]):
+
+            client = ComfyUIClient(server_url=server_url, capability="video")
+            if not client.is_available():
+                return ToolResult(success=False, error=client.unavailable_reason())
+            apply_nodes = (
+                "MiniMaxH3RefModsLoader",
+                "MiniMaxH3RefModTextEncode",
+                "MiniMaxH3ReferenceToVideo",
+                "BasicGuider",
+            )
+            missing_apply_nodes = [
+                node for node in apply_nodes if not client.has_node(node)
+            ]
+            if missing_apply_nodes:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "RefMod application is blocked on the selected ComfyUI server; "
+                        "missing nodes: " + ", ".join(missing_apply_nodes)
+                    ),
+                )
+            missing_apply_inputs = []
+            for node, required_inputs in REFMOD_VIDEO_NODE_INPUT_REQUIREMENTS.items():
+                missing_inputs = client.check_node_inputs(node, required_inputs)
+                if missing_inputs:
+                    missing_apply_inputs.append(
+                        f"{node} ({', '.join(missing_inputs)})"
+                    )
+            if missing_apply_inputs:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "RefMod application is blocked; the selected ComfyUI server "
+                        "has incompatible node inputs: "
+                        + ", ".join(missing_apply_inputs)
+                    ),
+                )
+            _, missing_models = client.check_models([inputs["video_vae_name"]])
+            if missing_models:
+                return ToolResult(
+                    success=False,
+                    error="RefMod extraction is blocked; missing H3 video VAE: "
+                    + ", ".join(missing_models),
+                )
+
+            cache_match = self._cache_matches(
+                catalog, asset_id, paths, inputs["concept_type"], inputs["video_vae_name"]
+            )
+            if cache_match:
                 record = catalog.data["refmod_assets"][asset_id]
+                if record.get("project_id") != inputs["project_id"]:
+                    catalog.register_refmod_asset(
+                        asset_id,
+                        project_id=inputs["project_id"],
+                        project_path=record["project_path"],
+                        loader_name=record["loader_name"],
+                        concept_type=record["concept_type"],
+                        source_sha256=source_sha256,
+                        extractor=record["extractor"],
+                    )
+                    record = catalog.data["refmod_assets"][asset_id]
                 data = {**record, "asset_id": asset_id, "from_cache": True}
                 return ToolResult(
                     success=True,
@@ -327,16 +405,27 @@ class ComfyUIRefMod(BaseTool):
                     ),
                 )
 
-            client = ComfyUIClient(server_url=server_url, capability="video")
-            if not client.is_available():
-                return ToolResult(success=False, error=client.unavailable_reason())
             required_nodes = ("LoadImage", "VAELoader", _REFMOD_NODE_CLASS)
             missing_nodes = [node for node in required_nodes if not client.has_node(node)]
             if missing_nodes:
                 return ToolResult(success=False, error="RefMod extraction is blocked; missing ComfyUI nodes: " + ", ".join(missing_nodes))
-            _, missing_models = client.check_models([inputs["video_vae_name"]])
-            if missing_models:
-                return ToolResult(success=False, error="RefMod extraction is blocked; missing H3 video VAE: " + ", ".join(missing_models))
+
+            missing_extraction_inputs = []
+            for node, required_inputs in REFMOD_EXTRACTION_NODE_INPUT_REQUIREMENTS.items():
+                missing_inputs = client.check_node_inputs(node, required_inputs)
+                if missing_inputs:
+                    missing_extraction_inputs.append(
+                        f"{node} ({', '.join(missing_inputs)})"
+                    )
+            if missing_extraction_inputs:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "RefMod extraction is blocked; the selected ComfyUI server "
+                        "has incompatible node inputs: "
+                        + ", ".join(missing_extraction_inputs)
+                    ),
+                )
 
             paths["model_library_root"].mkdir(parents=True, exist_ok=True)
             workflow = json.loads(_WORKFLOW.read_text(encoding="utf-8"))
@@ -351,14 +440,22 @@ class ComfyUIRefMod(BaseTool):
                 "concept_type": [{"node": _REFMOD_NODE_ID, "input": "concept_type"}],
                 "description": [{"node": _REFMOD_NODE_ID, "input": "description"}],
             }
-            workflow = client.bind_workflow(workflow, bindings, {
-                "reference_image_path": str(source),
-                "video_vae_name": inputs["video_vae_name"],
-                "refmod_name": basename,
-                "refmod_subfolder": subfolder,
-                "concept_type": inputs["concept_type"],
-                "description": str(asset.get("description", "")),
-            })
+            with tempfile.TemporaryDirectory(prefix="openmontage-refmod-") as temp_dir:
+                source_snapshot = Path(temp_dir) / source.name
+                source_snapshot.write_bytes(source_bytes)
+                workflow = client.bind_workflow(workflow, bindings, {
+                    "reference_image_path": str(source_snapshot),
+                    "video_vae_name": inputs["video_vae_name"],
+                    "refmod_name": basename,
+                    "refmod_subfolder": subfolder,
+                    "concept_type": inputs["concept_type"],
+                    "description": str(asset.get("description", "")),
+                })
+                if _sha256_file(source) != source_sha256:
+                    return ToolResult(
+                        success=False,
+                        error="Approved source changed before RefMod submission; review and retry extraction",
+                    )
             prompt_id = client.submit(workflow)
             history = client.poll(
                 prompt_id,
@@ -372,6 +469,13 @@ class ComfyUIRefMod(BaseTool):
                 return ToolResult(success=False, error="RefMod extractor wrote outside the selected models/refmods workspace")
             if saved_path != paths["model_library_path"]:
                 return ToolResult(success=False, error="RefMod extractor saved an unexpected loader path")
+
+            if _sha256_file(source) != source_sha256:
+                saved_path.unlink(missing_ok=True)
+                return ToolResult(
+                    success=False,
+                    error="Approved source changed during extraction; no RefMod was registered",
+                )
 
             mod_sha256 = _sha256_file(saved_path)
             project_path = paths["project_path"]
@@ -389,13 +493,20 @@ class ComfyUIRefMod(BaseTool):
                     {"role": "video_vae", "name": inputs["video_vae_name"]},
                 ],
             }
-            catalog.register_refmod_asset(
-                asset_id,
-                project_path=str(project_path),
-                loader_name=paths["loader_name"],
-                concept_type=inputs["concept_type"],
-                extractor=extractor,
-            )
+            try:
+                catalog.register_refmod_asset(
+                    asset_id,
+                    project_id=inputs["project_id"],
+                    project_path=str(project_path),
+                    loader_name=paths["loader_name"],
+                    concept_type=inputs["concept_type"],
+                    source_sha256=source_sha256,
+                    extractor=extractor,
+                )
+            except Exception:
+                project_path.unlink(missing_ok=True)
+                saved_path.unlink(missing_ok=True)
+                raise
             data = {
                 "asset_id": asset_id,
                 "project_path": str(project_path.relative_to(project_root)),

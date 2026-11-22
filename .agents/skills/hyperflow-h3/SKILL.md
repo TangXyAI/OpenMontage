@@ -55,7 +55,7 @@ contract, not the one that happens to be downloaded first.
 | Variant | Supports | Use when |
 |---|---|---|
 | `fl2va` | text-to-video (t2v), image-to-video (i2v), first-last-frame-to-video (flf2v) | You have text, one start frame, or start+end frames. |
-| `ref2va` | reference-to-video (ref2v) | You have up to two reference images that define subject and/or setting. |
+| `ref2va` | reference-to-video (ref2v) | You have reusable visual references or one-off native references for subject and/or setting. |
 
 Both variants emit video **with native audio**. `fl2va` cannot take reference
 images and `ref2va` cannot be used as a plain t2v checkpoint — route the
@@ -149,9 +149,20 @@ Operation-specific bindings:
 - **image_to_video** — as t2v, plus start frame on `20`/`image`.
 - **first_last_frame_to_video** — start frame on `20`/`image`, end frame on
   `21`/`image`.
-- **reference_to_video** — first reference on `20`/`image`, second on
-  `21`/`image`. Requires exactly two `reference_image_paths`; `ref2va` needs both
-  loaders wired, so do not submit with one.
+- **reference_to_video without RefMods** — first reference on `20`/`image`,
+  second on `21`/`image`. The bundled native path requires exactly two
+  `reference_image_paths`; do not submit with only one.
+- **reference_to_video with project RefMods** — `MiniMaxH3RefModTextEncode` can run
+  with no native still images. It loads one ordered RefMod bundle, maps visual
+  Mods to `<Picture N>` while encoding the prompt, and sends that conditioning
+  to H3. Each call supports up to eight mapped Mods. Exact prompt labels come
+  from the ordered asset descriptors; `<Subject N>` is not a RefMod binding.
+- **Native video/motion references** — use a native Ref2VA graph with named
+  `reference_videos.<name>` workflow bindings. The installed RefMod Text Encode
+  node does not accept separate native video references; do not combine those
+  inputs with project RefMods in one shot without a different validated graph.
+- **Exact first/last frames** stay on `first_last_frame_to_video` (FL2VA) and
+  never receive local RefMod bindings.
 - **ref2v ref bindings** — when using a reference workflow that names its inputs
   `reference_images.ref_image_0` / `reference_images.ref_image_1`, they still map
   to nodes `20` and `21`.

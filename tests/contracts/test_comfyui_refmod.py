@@ -10,15 +10,22 @@ class FakeComfyUIClient:
         self.server_url = "http://127.0.0.1:8290"
         self.workflow = None
         self.submission_count = 0
+        self.available = True
 
     def is_available(self):
-        return True
+        return self.available
+
+    def unavailable_reason(self):
+        return "selected ComfyUI server is unavailable"
 
     def has_node(self, node_class: str) -> bool:
         return node_class != self.missing_node
 
     def check_models(self, required: list[str]):
         return list(required), []
+
+    def check_node_inputs(self, _node_class, _required_inputs):
+        return []
 
     def list_models(self):
         return {"vae": ["minimax_h3_video_vae_fp16.safetensors"]}
@@ -94,6 +101,57 @@ def test_refmod_tool_contract_and_project_asset_creation(tmp_path, monkeypatch):
     assert manifest["metadata"]["refmod_assets"]["hero"]["status"] == "ready"
 
 
+def test_static_project_assets_are_extracted_as_picture_refs(tmp_path, monkeypatch):
+    import tools.video.comfyui_refmod as module
+
+    project = tmp_path / "projects" / "film-a"
+    workspace = tmp_path / "comfy"
+    workspace.mkdir()
+    _catalog(project)
+    fake = FakeComfyUIClient(workspace)
+    monkeypatch.setattr(module, "ComfyUIClient", lambda **kwargs: fake)
+
+    result = ComfyUIRefMod().execute({
+        "project_id": "film-a", "project_dir": str(project),
+        "comfyui_workspace": str(workspace), "server_url": "http://127.0.0.1:8290",
+        "asset_id": "hero", "reference_path": "assets/images/hero.png",
+        "video_vae_name": "minimax_h3_video_vae_fp16.safetensors",
+        "concept_type": "identity",
+    })
+
+    assert result.success, result.error
+    assert fake.workflow["4"]["inputs"]["image_refs"] == "separate"
+
+
+def test_refmod_extraction_blocks_when_selected_node_lacks_a_workflow_socket(
+    tmp_path, monkeypatch
+):
+    import tools.video.comfyui_refmod as module
+
+    project = tmp_path / "projects" / "film-a"
+    workspace = tmp_path / "comfy"
+    workspace.mkdir()
+    _catalog(project)
+    fake = FakeComfyUIClient(workspace)
+    fake.check_node_inputs = lambda node, _required: (
+        ["image_refs"] if node == "MiniMaxH3RefModExtract" else []
+    )
+    monkeypatch.setattr(module, "ComfyUIClient", lambda **kwargs: fake)
+
+    result = ComfyUIRefMod().execute({
+        "project_id": "film-a", "project_dir": str(project),
+        "comfyui_workspace": str(workspace), "server_url": "http://127.0.0.1:8290",
+        "asset_id": "hero", "reference_path": "assets/images/hero.png",
+        "video_vae_name": "minimax_h3_video_vae_fp16.safetensors",
+        "concept_type": "identity",
+    })
+
+    assert not result.success
+    assert "MiniMaxH3RefModExtract" in result.error
+    assert "image_refs" in result.error
+    assert fake.submission_count == 0
+
+
 def test_refmod_provenance_records_extension_version_and_video_vae(tmp_path, monkeypatch):
     import tools.video.comfyui_refmod as module
     from lib.narrative_assets import NarrativeAssets
@@ -147,6 +205,104 @@ def test_refmod_tool_reuses_identical_extraction(tmp_path, monkeypatch):
     assert fake.submission_count == 1
 
 
+def test_refmod_cache_hit_still_checks_the_selected_server(tmp_path, monkeypatch):
+    import tools.video.comfyui_refmod as module
+
+    project = tmp_path / "projects" / "film-a"
+    workspace = tmp_path / "comfy"
+    workspace.mkdir()
+    _catalog(project)
+    fake = FakeComfyUIClient(workspace)
+    monkeypatch.setattr(module, "ComfyUIClient", lambda **kwargs: fake)
+    tool = ComfyUIRefMod()
+    inputs = {
+        "project_id": "film-a", "project_dir": str(project),
+        "comfyui_workspace": str(workspace), "server_url": "http://127.0.0.1:8290",
+        "asset_id": "hero", "reference_path": "assets/images/hero.png",
+        "video_vae_name": "minimax_h3_video_vae_fp16.safetensors",
+        "concept_type": "identity",
+    }
+    first = tool.execute(inputs)
+    assert first.success
+
+    fake.available = False
+    second = tool.execute(inputs)
+
+    assert not second.success
+    assert "selected ComfyUI server is unavailable" in second.error
+    assert fake.submission_count == 1
+
+
+def test_refmod_cache_hit_repairs_a_missing_or_changed_loader_copy(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import tools.video.comfyui_refmod as module
+
+    project = tmp_path / "projects" / "film-a"
+    workspace = tmp_path / "comfy"
+    workspace.mkdir()
+    _catalog(project)
+    fake = FakeComfyUIClient(workspace)
+    monkeypatch.setattr(module, "ComfyUIClient", lambda **kwargs: fake)
+    tool = ComfyUIRefMod()
+    inputs = {
+        "project_id": "film-a", "project_dir": str(project),
+        "comfyui_workspace": str(workspace), "server_url": "http://127.0.0.1:8290",
+        "asset_id": "hero", "reference_path": "assets/images/hero.png",
+        "video_vae_name": "minimax_h3_video_vae_fp16.safetensors",
+        "concept_type": "identity",
+    }
+    first = tool.execute(inputs)
+    loader_copy = workspace / "models" / "refmods" / f"{first.data['loader_name']}.safetensors"
+    expected = project / first.data["project_path"]
+    assert first.success and loader_copy.is_file()
+
+    loader_copy.unlink()
+    repaired_missing = tool.execute(inputs)
+    loader_copy.write_bytes(b"tampered-loader-cache")
+    repaired_changed = tool.execute(inputs)
+
+    digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    assert repaired_missing.success and repaired_missing.data["from_cache"] is True
+    assert repaired_changed.success and repaired_changed.data["from_cache"] is True
+    assert digest(loader_copy) == digest(expected)
+    assert fake.submission_count == 1
+
+
+def test_refmod_extraction_rejects_source_changed_while_polling(tmp_path, monkeypatch):
+    import tools.video.comfyui_refmod as module
+    from lib.narrative_assets import NarrativeAssets
+
+    project = tmp_path / "projects" / "film-a"
+    workspace = tmp_path / "comfy"
+    workspace.mkdir()
+    _catalog(project)
+    source = project / "assets" / "images" / "hero.png"
+    fake = FakeComfyUIClient(workspace)
+    original_poll = fake.poll
+
+    def change_source_during_poll(*args, **kwargs):
+        history = original_poll(*args, **kwargs)
+        source.write_bytes(b"changed-after-upload")
+        return history
+
+    fake.poll = change_source_during_poll
+    monkeypatch.setattr(module, "ComfyUIClient", lambda **kwargs: fake)
+
+    result = ComfyUIRefMod().execute({
+        "project_id": "film-a", "project_dir": str(project),
+        "comfyui_workspace": str(workspace), "server_url": "http://127.0.0.1:8290",
+        "asset_id": "hero", "reference_path": "assets/images/hero.png",
+        "video_vae_name": "minimax_h3_video_vae_fp16.safetensors",
+        "concept_type": "identity",
+    })
+
+    assert not result.success
+    assert "source changed during extraction" in result.error.lower()
+    assert "hero" not in NarrativeAssets(project).data.get("refmod_assets", {})
+
+
 def test_refmod_tool_refuses_unindexed_loader_path_collision(tmp_path, monkeypatch):
     import hashlib
     import tools.video.comfyui_refmod as module
@@ -158,7 +314,7 @@ def test_refmod_tool_refuses_unindexed_loader_path_collision(tmp_path, monkeypat
     source_hash = hashlib.sha256((project / "assets/images/hero.png").read_bytes()).hexdigest()
     paths = module.derive_refmod_paths(
         project_dir=project, comfyui_workspace=workspace, project_id="film-a",
-        asset_id="hero", state="default", source_sha256=source_hash,
+        asset_id="hero", entity_id="hero", state="default", source_sha256=source_hash,
         concept_type="identity", video_vae_name="minimax_h3_video_vae_fp16.safetensors",
     )
     paths["model_library_path"].parent.mkdir(parents=True, exist_ok=True)
