@@ -206,6 +206,14 @@ def test_intentional_nonadjacent_state_change_passes(tmp_path):
     validate_shot_continuity(scene_plan, shot_specs, catalog_data, tmp_path, strict=True)
 
 
+def test_identity_reference_requires_matching_entity_state_record(tmp_path):
+    scene_plan, shot_specs, catalog_data = _fixture(tmp_path, declare_change=True)
+    shot_specs["shots"][2]["continuity"]["entities"] = []
+
+    with pytest.raises(ContinuityValidationError, match="identity reference.*entity state"):
+        validate_shot_continuity(scene_plan, shot_specs, catalog_data, tmp_path, strict=True)
+
+
 def test_context_copies_descriptor_and_role_labeled_references(tmp_path):
     _, shot_specs, catalog_data = _fixture(tmp_path)
     shot = shot_specs["shots"][0]
@@ -214,3 +222,8 @@ def test_context_copies_descriptor_and_role_labeled_references(tmp_path):
 
     assert context["stable_descriptors"][0]["text"] == "Courier in an olive coat with a silver key."
     assert {ref["role"] for ref in context["references"]} == {"identity", "location"}
+    assert context["continuity_instructions"] == {
+        "screen_direction": "Moves left-to-right through the doorway.",
+        "gaze_targets": ["workbench"],
+        "hand_prop_states": ["Right hand empty."],
+    }

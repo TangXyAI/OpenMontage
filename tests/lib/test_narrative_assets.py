@@ -177,3 +177,33 @@ def test_enhancement_invalidates_review_of_previous_path(tmp_path):
     )
 
     assert "s01-sh01" not in catalog.asset_manifest()["metadata"]["continuity_reviews"]
+
+
+def test_reapplying_enhancement_to_same_path_invalidates_current_review(tmp_path):
+    catalog = _catalog_with_selected_shot(tmp_path)
+    output = "assets/video/enhanced/take-a.mp4"
+    _write_media(tmp_path, output)
+    catalog.apply_enhancement(
+        "s01-sh01", "take-a", output, duration_seconds=4.0,
+        enhancement={"operation": "video_upscale", "model": "Upscaler", "source_path": "assets/video/take-a.mp4"},
+    )
+    catalog.record_continuity_review("s01-sh01", "take-a", _review(tmp_path))
+    (tmp_path / output).write_bytes(b"different enhanced frames")
+
+    catalog.apply_enhancement(
+        "s01-sh01", "take-a", output, duration_seconds=4.0,
+        enhancement={"operation": "video_upscale", "model": "Upscaler-v2", "source_path": output},
+    )
+
+    assert "continuity_review" not in catalog.data["shots"]["s01-sh01"]["takes"]["take-a"]["metadata"]
+    assert "s01-sh01" not in catalog.asset_manifest()["metadata"]["continuity_reviews"]
+
+
+def test_export_rejects_selected_drift_review_without_override(tmp_path):
+    catalog = _catalog_with_selected_shot(tmp_path)
+    dimensions = {name: "pass" for name in _REVIEW_DIMENSIONS}
+    dimensions["location_anchors"] = "drift"
+    catalog.record_continuity_review("s01-sh01", "take-a", _review(tmp_path, dimensions=dimensions))
+
+    with pytest.raises(ValueError, match="override"):
+        catalog.asset_manifest()

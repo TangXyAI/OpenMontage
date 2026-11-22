@@ -433,6 +433,50 @@ class VideoCompose(BaseTool):
         edit = inputs.get("edit_decisions") or {}
         selection = edit.get("metadata", {}).get("narrative_selection")
         if selection is None:
+            project_dir = inputs.get("project_dir")
+            if not project_dir:
+                return None
+            from lib.checkpoint import read_checkpoint
+            from lib.narrative_assets import NarrativeAssets
+            project_root = Path(project_dir).resolve()
+            catalog_path = project_root / "artifacts" / "narrative_assets.json"
+            catalog = NarrativeAssets(project_root) if catalog_path.is_file() else None
+            proposal_checkpoint = read_checkpoint(project_root.parent, project_root.name, "proposal")
+            asset_checkpoint = read_checkpoint(project_root.parent, project_root.name, "assets")
+            edit_checkpoint = read_checkpoint(project_root.parent, project_root.name, "edit")
+            approved_manifest = (asset_checkpoint or {}).get("artifacts", {}).get("asset_manifest", {})
+            approved_edit = (edit_checkpoint or {}).get("artifacts", {}).get("edit_decisions", {})
+            proposal_packet = (proposal_checkpoint or {}).get("artifacts", {}).get("proposal_packet", {})
+            input_manifest_metadata = (inputs.get("asset_manifest") or {}).get("metadata", {})
+            approved_manifest_metadata = approved_manifest.get("metadata", {})
+            input_edit_metadata = edit.get("metadata", {})
+            approved_edit_metadata = approved_edit.get("metadata", {})
+
+            def has_strict_shots(metadata: Any) -> bool:
+                records = metadata.get("continuity_shots", {}) if isinstance(metadata, Mapping) else {}
+                return isinstance(records, Mapping) and any(
+                    isinstance(record, Mapping) and record.get("continuity_contract_version") == "1.0"
+                    for record in records.values()
+                )
+
+            from lib.narrative_continuity import ContinuityValidationError, continuity_mode
+            try:
+                proposal_is_strict = continuity_mode(proposal_packet) == "strict"
+            except ContinuityValidationError as exc:
+                return ToolResult(success=False, error=str(exc))
+            catalog_is_strict = any(
+                isinstance(shot, Mapping) and shot.get("continuity_contract_version") == "1.0"
+                for shot in catalog.data.get("shots", {}).values()
+            ) if catalog is not None else False
+            if (proposal_is_strict or catalog_is_strict
+                    or has_strict_shots(input_manifest_metadata)
+                    or has_strict_shots(approved_manifest_metadata)
+                    or has_strict_shots(input_edit_metadata)
+                    or has_strict_shots(approved_edit_metadata)):
+                return ToolResult(
+                    success=False,
+                    error="Strict narrative compose requires input narrative selection metadata",
+                )
             return None
         project_dir = inputs.get("project_dir")
         if not project_dir or not isinstance(selection, dict) or not selection:
@@ -545,6 +589,27 @@ class VideoCompose(BaseTool):
                 asset_path = asset_path.resolve() if asset_path.is_absolute() else (project_root / asset_path).resolve()
                 if asset_path != current_path:
                     return ToolResult(success=False, error=f"Continuity review or take path is stale in {label} for {shot_id}")
+
+            approved_cuts = approved_edit.get("cuts", [])
+            matching_approved_cuts = [
+                cut for cut in approved_cuts
+                if isinstance(cut, Mapping) and cut.get("id") == shot_id
+            ] if isinstance(approved_cuts, list) else []
+            if not matching_approved_cuts:
+                return ToolResult(success=False, error=f"Completed edit checkpoint has no cut for strict shot {shot_id}")
+            approved_lookup = {
+                row.get("id"): row.get("path")
+                for row in approved_manifest.get("assets", [])
+                if isinstance(row, Mapping) and isinstance(row.get("id"), str)
+            }
+            for approved_cut in matching_approved_cuts:
+                approved_source = approved_lookup.get(approved_cut.get("source"), approved_cut.get("source"))
+                if not isinstance(approved_source, str):
+                    return ToolResult(success=False, error=f"Completed edit checkpoint has an invalid cut for {shot_id}")
+                approved_path = Path(approved_source)
+                approved_path = approved_path.resolve() if approved_path.is_absolute() else (project_root / approved_path).resolve()
+                if approved_path != current_path:
+                    return ToolResult(success=False, error=f"Completed edit checkpoint has a stale media path for {shot_id}")
 
         lookup = {asset["id"]: asset["path"] for asset in (inputs.get("asset_manifest") or {}).get("assets", [])}
         candidates = {}

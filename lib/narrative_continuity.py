@@ -285,6 +285,7 @@ def validate_shot_continuity(
             issues.append(f"shot {shot_id} continuity.entities must be an array")
             entities = []
         seen_entity_ids: set[str] = set()
+        declared_entity_states: set[tuple[str, str, str]] = set()
         for entity in entities:
             if not isinstance(entity, Mapping):
                 issues.append(f"shot {shot_id} has an invalid entity state")
@@ -299,6 +300,7 @@ def validate_shot_continuity(
                 issues.append(f"shot {shot_id} has duplicate entity_id {entity_id}")
                 continue
             seen_entity_ids.add(entity_id)
+            declared_entity_states.add((entity_id, asset_id, state))
             asset = catalog_assets.get(asset_id)
             if not isinstance(asset, Mapping):
                 issues.append(f"shot {shot_id} references unknown asset_id {asset_id}")
@@ -332,6 +334,19 @@ def validate_shot_continuity(
                         "without a declared intentional_changes entry"
                     )
             last_states[entity_id] = (state, shot_id)
+
+        for reference, asset, _ in resolved_references:
+            role = reference.get("role")
+            if role not in {"identity", "prop"}:
+                continue
+            asset_id = reference.get("asset_id")
+            entity_id = _asset_entity_id(str(asset_id), asset)
+            state = asset.get("state")
+            if (role == "identity" and asset.get("kind") != "character") or (role == "prop" and asset.get("kind") != "prop"):
+                issues.append(f"shot {shot_id} {role} reference {asset_id} has an incompatible asset kind")
+                continue
+            if (entity_id, str(asset_id), str(state)) not in declared_entity_states:
+                issues.append(f"shot {shot_id} {role} reference {asset_id} has no matching entity state")
 
     if issues:
         raise ContinuityValidationError(issues)
@@ -391,6 +406,11 @@ def build_shot_context(
         "location_lock": location_lock,
         "carried_states": list(continuity.get("carried_states", [])),
         "intentional_changes": list(continuity.get("intentional_changes", [])),
+        "continuity_instructions": {
+            "screen_direction": continuity.get("screen_direction"),
+            "gaze_targets": list(continuity.get("gaze_targets", [])),
+            "hand_prop_states": list(continuity.get("hand_prop_states", [])),
+        },
         "shot_specific": {
             key: shot[key]
             for key in ("scene_context", "first_frame", "action_timing", "optics", "camera", "style", "constraints")

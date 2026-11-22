@@ -222,6 +222,16 @@ class NarrativeAssets:
                 assets.append(item)
                 review = take.get("metadata", {}).get("continuity_review")
                 if review and review.get("reviewed_path") == take["path"]:
+                    if shot.get("continuity_contract_version") == "1.0":
+                        dimensions = review.get("dimensions", {})
+                        unresolved = isinstance(dimensions, Mapping) and any(
+                            value in {"drift", "unclear"} for value in dimensions.values()
+                        )
+                        override_reason = review.get("override_reason")
+                        if unresolved and (not isinstance(override_reason, str) or not override_reason.strip()):
+                            raise ValueError(
+                                f"Selected strict take {shot_id}/{take_id} needs a continuity override before export"
+                            )
                     continuity_reviews[shot_id] = {"take_id": take_id, **review}
         selection = {shot_id: shot["selected"] for shot_id, shot in self.data["shots"].items() if shot.get("selected")}
         metadata = {
@@ -270,6 +280,7 @@ class NarrativeAssets:
         take = shot["takes"][take_id]
         metadata = take.setdefault("metadata", {})
         metadata.setdefault("original_path", take["path"])
+        metadata.pop("continuity_review", None)
         take["path"] = media
         take["duration_seconds"] = duration_seconds
         metadata["enhancement"] = dict(enhancement)
