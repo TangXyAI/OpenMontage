@@ -207,3 +207,149 @@ def test_export_rejects_selected_drift_review_without_override(tmp_path):
 
     with pytest.raises(ValueError, match="override"):
         catalog.asset_manifest()
+
+
+def _refmod_catalog(root):
+    _write_media(
+        root,
+        "assets/images/hero-wet.png",
+        "assets/images/location.png",
+        "assets/refmods/hero-wet.safetensors",
+        "assets/refmods/location.safetensors",
+    )
+    catalog = NarrativeAssets(root)
+    catalog.put_asset("hero-wet", "character", "Courier in a soaked coat", "assets/images/hero-wet.png", state="wet", entity_id="hero")
+    catalog.put_asset("loc-master", "location", "Empty workshop", "assets/images/location.png", state="master_plate", entity_id="loc-workshop")
+    catalog.register_shot("s01-sh01", "s01")
+    catalog.link_assets("s01-sh01", ["hero-wet", "loc-master"])
+    return catalog
+
+
+def _register_refmod(catalog, asset_id, project_path, loader_name, concept_type):
+    catalog.register_refmod_asset(
+        asset_id,
+        project_path=project_path,
+        loader_name=loader_name,
+        concept_type=concept_type,
+        extractor={
+            "tool": "comfyui_refmod",
+            "node": "MiniMaxH3RefModExtract",
+            "workflow_hash_sha256": "c" * 64,
+        },
+    )
+
+
+def test_refmod_registration_exports_source_and_mod_hashes(tmp_path):
+    import hashlib
+
+    catalog = _refmod_catalog(tmp_path)
+    _register_refmod(
+        catalog, "hero-wet", "assets/refmods/hero-wet.safetensors",
+        "openmontage/film/hero-wet-a1b2c3d4", "identity",
+    )
+
+    record = catalog.asset_manifest()["metadata"]["refmod_assets"]["hero-wet"]
+    assert record["entity_id"] == "hero"
+    assert record["state"] == "wet"
+    assert record["source_sha256"] == hashlib.sha256(b"media").hexdigest()
+    assert record["refmod_sha256"] == hashlib.sha256(b"media").hexdigest()
+    assert record["status"] == "ready"
+
+
+def test_refmod_registration_rejects_paths_outside_project(tmp_path):
+    catalog = _refmod_catalog(tmp_path / "project")
+    outside = tmp_path / "outside.safetensors"
+    outside.write_bytes(b"outside Mod")
+
+    with pytest.raises(ValueError, match="inside the project"):
+        _register_refmod(
+            catalog, "hero-wet", str(outside),
+            "openmontage/film/hero-wet-a1b2c3d4", "identity",
+        )
+
+
+def test_refmod_registration_rejects_loader_name_traversal(tmp_path):
+    catalog = _refmod_catalog(tmp_path)
+
+    with pytest.raises(ValueError, match="loader"):
+        _register_refmod(
+            catalog, "hero-wet", "assets/refmods/hero-wet.safetensors",
+            "openmontage/film/../other/mod", "identity",
+        )
+
+
+def test_refmod_registration_rejects_unknown_extractor_fields(tmp_path):
+    catalog = _refmod_catalog(tmp_path)
+
+    with pytest.raises(ValueError, match="extractor"):
+        catalog.register_refmod_asset(
+            "hero-wet",
+            project_path="assets/refmods/hero-wet.safetensors",
+            loader_name="openmontage/film/hero-wet-a1b2c3d4",
+            concept_type="identity",
+            extractor={
+                "tool": "comfyui_refmod",
+                "node": "MiniMaxH3RefModExtract",
+                "workflow_hash_sha256": "c" * 64,
+                "untracked_private_field": "must not leak into manifest",
+            },
+        )
+
+
+def test_refmod_registration_rejects_malformed_extractor_hash(tmp_path):
+    catalog = _refmod_catalog(tmp_path)
+
+    with pytest.raises(ValueError, match="workflow_hash_sha256"):
+        catalog.register_refmod_asset(
+            "hero-wet",
+            project_path="assets/refmods/hero-wet.safetensors",
+            loader_name="openmontage/film/hero-wet-a1b2c3d4",
+            concept_type="identity",
+            extractor={
+                "tool": "comfyui_refmod",
+                "node": "MiniMaxH3RefModExtract",
+                "workflow_hash_sha256": "not-a-hash",
+            },
+        )
+
+
+def test_refmods_for_shot_returns_only_current_linked_mods_in_stable_order(tmp_path):
+    catalog = _refmod_catalog(tmp_path)
+    _register_refmod(
+        catalog, "hero-wet", "assets/refmods/hero-wet.safetensors",
+        "openmontage/film/hero-wet-a1b2c3d4", "identity",
+    )
+    _register_refmod(
+        catalog, "loc-master", "assets/refmods/location.safetensors",
+        "openmontage/film/location-e5f6a7b8", "background",
+    )
+
+    refs = catalog.refmods_for_shot("s01-sh01")
+    assert [item["asset_id"] for item in refs] == ["hero-wet", "loc-master"]
+    assert [item["prompt_label"] for item in refs] == ["<Subject 1>", "<Subject 2>"]
+    assert [item["description"] for item in refs] == ["Courier in a soaked coat", "Empty workshop"]
+
+
+def test_refmods_for_shot_skips_mod_when_source_hash_changes(tmp_path):
+    catalog = _refmod_catalog(tmp_path)
+    _register_refmod(
+        catalog, "hero-wet", "assets/refmods/hero-wet.safetensors",
+        "openmontage/film/hero-wet-a1b2c3d4", "identity",
+    )
+    (tmp_path / "assets/images/hero-wet.png").write_bytes(b"updated approved sheet")
+
+    assert catalog.refmods_for_shot("s01-sh01") == []
+    assert catalog.asset_manifest()["metadata"]["refmod_assets"]["hero-wet"]["status"] == "stale"
+
+
+def test_refmod_usage_is_exported_with_decision_link(tmp_path):
+    catalog = _refmod_catalog(tmp_path)
+    catalog.record_refmod_usage(
+        "project_refmod", route_id="minimax_h3_local", decision_id="d-004",
+    )
+
+    assert catalog.asset_manifest()["metadata"]["refmod_usage"] == {
+        "mode": "project_refmod",
+        "route_id": "minimax_h3_local",
+        "decision_id": "d-004",
+    }

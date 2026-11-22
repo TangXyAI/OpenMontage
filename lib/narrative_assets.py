@@ -10,7 +10,7 @@ import hashlib
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -48,6 +48,14 @@ class NarrativeAssets:
         if not full.is_relative_to(self.root) or not full.is_file():
             raise ValueError(f"Media must exist inside the project: {path}")
         return str(full.relative_to(self.root))
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +140,121 @@ class NarrativeAssets:
         shot["asset_ids"] = list(dict.fromkeys(asset_ids))
         self._save()
 
+    def register_refmod_asset(
+        self,
+        asset_id: str,
+        *,
+        project_path: str,
+        loader_name: str,
+        concept_type: str,
+        extractor: Mapping[str, Any],
+    ) -> None:
+        """Record a project Mod and the approved visual asset it conditions."""
+        asset = self.data["assets"].get(asset_id)
+        if not isinstance(asset, Mapping):
+            raise ValueError(f"Unknown RefMod source asset: {asset_id}")
+        if asset.get("kind") not in {"character", "location", "prop"}:
+            raise ValueError(f"RefMod source asset has an unsupported kind: {asset_id}")
+        if not isinstance(concept_type, str) or concept_type not in {"identity", "clothing", "background", "generic", "style"}:
+            raise ValueError(f"Unsupported RefMod concept type: {concept_type}")
+        if not isinstance(extractor, Mapping):
+            raise ValueError("RefMod extractor provenance must be a mapping")
+        allowed_extractor_keys = {"tool", "node", "workflow_hash_sha256", "model_stack"}
+        unknown_extractor_keys = set(extractor) - allowed_extractor_keys
+        if unknown_extractor_keys:
+            raise ValueError(
+                "RefMod extractor provenance has unsupported fields: "
+                + ", ".join(sorted(unknown_extractor_keys))
+            )
+        for key in ("tool", "node", "workflow_hash_sha256"):
+            value = extractor.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"RefMod extractor provenance needs {key}")
+        workflow_hash = extractor["workflow_hash_sha256"]
+        if len(workflow_hash) != 64 or any(char not in "0123456789abcdef" for char in workflow_hash):
+            raise ValueError("RefMod extractor workflow_hash_sha256 must be a lowercase SHA-256 digest")
+        if "model_stack" in extractor and (
+                not isinstance(extractor["model_stack"], list)
+                or any(not isinstance(item, Mapping) for item in extractor["model_stack"])):
+            raise ValueError("RefMod extractor model_stack must be a list of mappings")
+
+        normalized_loader = str(loader_name).replace("\\", "/")
+        loader_parts = PurePosixPath(normalized_loader).parts
+        if (len(loader_parts) < 3 or loader_parts[0] != "openmontage"
+                or any(part in {".", ".."} for part in loader_parts)):
+            raise ValueError("RefMod loader name must stay under openmontage/<project_id>/")
+
+        source_path = self._media(asset["path"])
+        mod_path = self._media(project_path)
+        if not mod_path.replace("\\", "/").startswith("assets/refmods/"):
+            raise ValueError("RefMod project path must be under assets/refmods/")
+        if Path(mod_path).suffix.lower() != ".safetensors":
+            raise ValueError("RefMod project asset must use the .safetensors extension")
+
+        record = {
+            "entity_id": str(asset.get("entity_id") or asset_id),
+            "state": str(asset.get("state") or "default"),
+            "concept_type": concept_type,
+            "project_path": mod_path,
+            "loader_name": normalized_loader,
+            "source_path": source_path,
+            "source_sha256": self._sha256(self.root / source_path),
+            "refmod_sha256": self._sha256(self.root / mod_path),
+            "status": "ready",
+            "extractor": dict(extractor),
+        }
+        self.data.setdefault("refmod_assets", {})[asset_id] = record
+        self._save()
+
+    def record_refmod_usage(self, mode: str, *, route_id: str, decision_id: str) -> None:
+        """Record the approved conditioning mode used for this asset batch."""
+        if mode not in {"project_refmod", "native_ref2va"}:
+            raise ValueError(f"Unsupported RefMod usage mode: {mode}")
+        if not isinstance(route_id, str) or not route_id.strip():
+            raise ValueError("RefMod usage needs a route_id")
+        if not isinstance(decision_id, str) or not decision_id.strip():
+            raise ValueError("RefMod usage needs a decision_id")
+        self.data["refmod_usage"] = {
+            "mode": mode,
+            "route_id": route_id,
+            "decision_id": decision_id,
+        }
+        self._save()
+
+    def _refmod_is_current(self, asset_id: str, record: Mapping[str, Any]) -> bool:
+        try:
+            asset = self.data["assets"][asset_id]
+            source_path = self._media(asset["path"])
+            mod_path = self._media(record["project_path"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return (
+            source_path == record.get("source_path")
+            and self._sha256(self.root / source_path) == record.get("source_sha256")
+            and self._sha256(self.root / mod_path) == record.get("refmod_sha256")
+        )
+
+    def refmods_for_shot(self, shot_id: str) -> list[dict[str, Any]]:
+        """Return current RefMods for linked assets in deterministic prompt order."""
+        shot = self.data["shots"].get(shot_id)
+        if not isinstance(shot, Mapping):
+            raise ValueError(f"Unknown shot: {shot_id}")
+        refmod_assets = self.data.get("refmod_assets", {})
+        records = []
+        for asset_id in sorted(set(shot.get("asset_ids", []))):
+            record = refmod_assets.get(asset_id)
+            if isinstance(record, Mapping) and self._refmod_is_current(asset_id, record):
+                asset = self.data["assets"][asset_id]
+                records.append({
+                    "asset_id": asset_id,
+                    "description": asset.get("description", ""),
+                    **record,
+                })
+        return [
+            {**record, "prompt_label": f"<Subject {index}>"}
+            for index, record in enumerate(records, start=1)
+        ]
+
     def record_continuity_review(self, shot_id: str, take_id: str, review: Mapping[str, Any]) -> None:
         shot = self.data["shots"].get(shot_id)
         if not shot or take_id not in shot.get("takes", {}):
@@ -201,6 +324,14 @@ class NarrativeAssets:
         assets = []
         continuity_shots = {}
         continuity_reviews = {}
+        refmod_assets = {
+            asset_id: {
+                **record,
+                "status": "ready" if self._refmod_is_current(asset_id, record) else "stale",
+            }
+            for asset_id, record in self.data.get("refmod_assets", {}).items()
+            if isinstance(record, Mapping)
+        }
         for shot_id, shot in self.data["shots"].items():
             scene_id = shot.get("scene_id", shot_id)
             continuity_record = {"scene_id": scene_id}
@@ -238,7 +369,10 @@ class NarrativeAssets:
             "narrative_selection": selection,
             "continuity_shots": continuity_shots,
             "continuity_reviews": continuity_reviews,
+            "refmod_assets": refmod_assets,
         }
+        if isinstance(self.data.get("refmod_usage"), Mapping):
+            metadata["refmod_usage"] = dict(self.data["refmod_usage"])
         return {"version": "1.0", "assets": assets, "metadata": metadata}
 
     def select_take(self, shot_id: str, take_id: str) -> None:

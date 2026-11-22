@@ -71,6 +71,46 @@
     "metadata": {
       "type": "object",
       "properties": {
+        "refmod_assets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["entity_id", "state", "concept_type", "project_path", "loader_name", "source_path", "source_sha256", "refmod_sha256", "status", "extractor"],
+            "properties": {
+              "entity_id": {"type": "string", "minLength": 1},
+              "state": {"type": "string", "minLength": 1},
+              "concept_type": {"type": "string", "enum": ["identity", "clothing", "background", "generic", "style"]},
+              "project_path": {"type": "string", "minLength": 1},
+              "loader_name": {"type": "string", "pattern": "^openmontage/[^/]+/.+$"},
+              "source_path": {"type": "string", "minLength": 1},
+              "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "refmod_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "status": {"type": "string", "enum": ["ready", "stale"]},
+              "extractor": {
+                "type": "object",
+                "required": ["tool", "node", "workflow_hash_sha256"],
+                "properties": {
+                  "tool": {"type": "string", "minLength": 1},
+                  "node": {"type": "string", "minLength": 1},
+                  "workflow_hash_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "model_stack": {"type": "array", "items": {"type": "object", "additionalProperties": true}}
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "refmod_usage": {
+          "type": "object",
+          "required": ["mode", "route_id", "decision_id"],
+          "properties": {
+            "mode": {"type": "string", "enum": ["project_refmod", "native_ref2va"]},
+            "route_id": {"type": "string", "minLength": 1},
+            "decision_id": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
         "continuity_shots": {
           "type": "object",
           "additionalProperties": {
