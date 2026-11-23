@@ -44,6 +44,7 @@ _WORKFLOWS = Path(__file__).resolve().parent.parent / "_comfyui" / "workflows"
 _WORKFLOW_FILES = {
     "face_refine": "enhance_face_refine_h3_api.json",
     "video_upscale": "enhance_seedvr2_3b_api.json",
+    "relayvsr": "enhance_relayvsr_x2_api.json",
 }
 _OUTPUT_NODE = "23"
 
@@ -126,6 +127,10 @@ DEFAULTS: dict[str, dict[str, str]] = {
         "seedvr2_dit": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
         "seedvr2_vae": "ema_vae_fp16.safetensors",
     },
+    "relayvsr": {
+        "unet": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
+        "vae": "relayvsr_flash_vae_x2_fp32.safetensors",
+    },
 }
 
 
@@ -161,7 +166,8 @@ class ComfyUIEnhance(BaseTool):
                 "enum": list(_OPERATIONS),
                 "description": (
                     "face_refine uses the H3 FaceRefine workflow (single "
-                    "close-up face); video_upscale uses SeedVR2 3B."
+                    "close-up face); video_upscale uses SeedVR2 3B; "
+                    "relayvsr uses RelayVSR x2."
                 ),
             },
             "input_path": {
@@ -452,6 +458,15 @@ class ComfyUIEnhance(BaseTool):
                 "23": {"filename_prefix": output_prefix},
             }
 
+        if operation == "relayvsr":
+            return {
+                "1": {"file": source_name},
+                "3": {"unet_name": models["unet"]},
+                "6": {"seed": inputs.get("seed", 42)},
+                "7": {"vae_name": models["vae"]},
+                "10": {"filename_prefix": output_prefix},
+            }
+
         raise ValueError(f"Unsupported enhancement operation: {operation!r}")
 
     # ------------------------------------------------------------------
@@ -563,7 +578,7 @@ class ComfyUIEnhance(BaseTool):
         try:
             paths = client.generate(
                 workflow,
-                output_node=_OUTPUT_NODE,
+                output_node="10" if operation == "relayvsr" else _OUTPUT_NODE,
                 dest=partial,
                 timeout=timeout,
                 interval=10,
@@ -703,6 +718,8 @@ class ComfyUIEnhance(BaseTool):
         operation: str, inputs: dict[str, Any]
     ) -> dict[str, Any]:
         """Effective creative knobs recorded for reproducibility."""
+        if operation == "relayvsr":
+            return {"seed": inputs.get("seed", 42)}
         if operation == "face_refine":
             return {
                 "denoise": inputs.get("denoise", 0.4),

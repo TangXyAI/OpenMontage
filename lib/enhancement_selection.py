@@ -3,14 +3,14 @@
 This module mirrors :mod:`lib.video_model_selection` for the local
 post-enhancement routes. It is a thin, deterministic helper: the agent offers
 the menu, the user approves one route, and only then does the agent call
-:func:`record_selection`. The fixed order keeps ``none`` first and both local
+:func:`record_selection`. The fixed order keeps ``none`` first and all local
 ComfyUI routes visible, so a silent re-route stays auditable.
 
 Availability combines three sources:
 
 * the ``comfyui_enhance`` tool must be registered and report ``available``;
 * the ComfyUI server must be running (passed through ``readiness``);
-* the matching readiness route (``face_refine`` / ``video_upscale``) must be
+* the matching readiness route (``face_refine`` / ``video_upscale`` / ``relayvsr``) must be
   ready on disk.
 
 ``estimate_source`` is deliberately honest: the face-refine time is a
@@ -59,8 +59,7 @@ class EnhancementRoute:
     estimate_source: str
 
 
-# Order is part of the contract: ``none`` first, then face refine, then the
-# SeedVR2 upscale route.
+# Order is part of the contract: retain the existing routes and append RelayVSR.
 ROUTES: tuple[EnhancementRoute, ...] = (
     EnhancementRoute(
         route_id="none",
@@ -83,6 +82,13 @@ ROUTES: tuple[EnhancementRoute, ...] = (
         operation="video_upscale",
         estimate_source="measured_scale",
     ),
+    EnhancementRoute(
+        route_id="relayvsr_upscale",
+        label="RelayVSR 2x upscale (default)",
+        tool=ENHANCEMENT_TOOL,
+        operation="relayvsr",
+        estimate_source="unknown",
+    ),
 )
 
 
@@ -104,6 +110,8 @@ def _estimate_seconds(route_id: str, duration_seconds: float) -> int:
         return 0
     if route_id == "face_refine":
         return round(120 + 60 * duration_seconds)
+    if route_id == "relayvsr_upscale":
+        return 0
     return round(30 + 178 * duration_seconds)
 
 
@@ -222,6 +230,7 @@ def build_menu(
                 "shared_warnings": [],
                 "estimated_seconds": estimated_seconds,
                 "estimate_source": route.estimate_source,
+                "recommended": route.route_id == "relayvsr_upscale" and available,
             }
         )
     return menu

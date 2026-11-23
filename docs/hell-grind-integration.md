@@ -269,7 +269,7 @@ shot_spec（模型无关）
 | GPU | RTX 4070 Ti SUPER / 16 GB | INT8 全分辨率可能 OOM |
 | 磁盘 | G: 剩余约 146 GB | 足够放一个 HyperFlow 检查点 |
 | HyperFlow 节点包 | ✅ 已安装 | `comfyui-hyperflow-flash`、`comfyui-hyperflow-int8-nodes` |
-| HyperFlow 工作流 | ✅ 已有 | `G:\ComfyUI\Shared\workflows\MiniMaxH3\Hyperflow\`（UI 格式，需转 API 格式） |
+| HyperFlow 工作流 | ✅ 已有 | `G:\ComfyUI\Shared\workflows\MiniMaxH3\01_一采\01_快速抽卡-加速\`（UI 格式，需转 API 格式） |
 | 文本编码器 | ✅ 已有 | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
 | 视频 VAE | ✅ 已有 | `minimax_h3_video_vae_fp16.safetensors` 等 |
 | 音频 VAE | ✅ 已有 | `minimax_h3_audio_vae_fp32.safetensors` |

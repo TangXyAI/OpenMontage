@@ -35,7 +35,7 @@ def _readiness(face=True, upscale=True, server=True):
 
 def test_menu_order_and_none_always_available():
     menu = build_menu(FakeRegistry({"comfyui_enhance": FakeTool()}), _readiness(face=False, upscale=False, server=False), duration_seconds=7.0)
-    assert [row["route_id"] for row in menu] == ["none", "face_refine", "seedvr2_upscale"]
+    assert [row["route_id"] for row in menu] == ["none", "face_refine", "seedvr2_upscale", "relayvsr_upscale"]
     assert menu[0]["available"] is True
     assert menu[1]["available"] is False
     assert menu[2]["available"] is False

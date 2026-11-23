@@ -4,12 +4,13 @@ This is the pipeline-facing skill for **local post-enhancement of selected takes
 
 Enhancement is an **assets-stage step**, not a compose-stage effect. It replaces the media of an already-selected take; it is not color grading, and it is not a way to rescue a take that was chosen badly. Local and API-zero-cost, but not free in time.
 
-## The two routes and the measured trade-off
+## Routes and measured trade-offs
 
 Source of evidence: `projects/_h3-api-export/STATUS.md`.
 
 | Route | What it does | Strength | Weakness | When |
 |---|---|---|---|---|
+| `relayvsr_upscale` (RelayVSR x2) | Whole-frame 2× video upscale, preserving source audio | Default overall upscale without FaceRefine | Fixed 2×; verify visual quality and resource use per shot | Default when overall upscale is desired |
 | `face_refine` (H3 FaceRefine) | Tracks and refines one face, then stitches it back with the original audio | Sharpest facial features and skin | Identity drift grows with denoise (visible at 0.4; much closer at 0.2–0.3); fixes only **the largest face** in frame | One protagonist, face large enough (see below) |
 | `seedvr2_upscale` (SeedVR2 3B FP8) | Whole-frame detail upscale to a target short edge (default 1080) | Most natural, identity closest to source, works on group/wide shots | Detail sharpness below FaceRefine; about **3 minutes per second of video** | Ensembles, wide shots, small faces, or when overall detail matters |
 | `none` | No enhancement | Fast, safe | — | Default when unsure |
@@ -18,24 +19,24 @@ Measured SeedVR2 run: 1080×1916, 73 frames / 3.04 s, H.264 + AAC, roughly 9 min
 
 FaceRefine denoise calibration (smoke clip, same refs/prompt/seed): 0.2 / 0.3 / 0.4 / 0.5 → SSIM 0.991 / 0.990 / 0.989 / 0.988. The face-crop comparison shows 0.2 closest to the source identity and head pose, 0.3 the practical sharpening default, 0.4 visibly sharper but a similar-different face, and 0.5 no extra gain over 0.4. For identity-sensitive hero shots start at **0.25–0.3** and compare frames before accepting.
 
-Route → operation mapping: `face_refine` → `operation="face_refine"`, `seedvr2_upscale` → `operation="video_upscale"` (the menu row already carries this in `row["operation"]`). `none` runs nothing.
+Route → operation mapping: `relayvsr_upscale` → `operation="relayvsr"`, `face_refine` → `operation="face_refine"`, `seedvr2_upscale` → `operation="video_upscale"` (the menu row already carries this in `row["operation"]`). `none` runs nothing.
 
 ## Selection rules
 
-1. **One dominant protagonist and the face is large enough** (guide: face height ≥ 120 px) → `face_refine`. Sample three frames before deciding; the tool does not detect or size faces. Use `denoise` 0.25–0.3 for identity-sensitive shots; reserve 0.4 for cases where sharpness matters more than exact identity and the user has compared frames.
-2. **Ensemble, wide shot, small faces, no clear protagonist, or overall detail needed** → `seedvr2_upscale`.
+1. **Overall upscale** → recommend `relayvsr_upscale` when available. It does not run FaceRefine; retain `none` and SeedVR2 as alternatives.
+2. **Distant small face that needs extra work** → optionally offer `face_refine` after overall upscale, only when a clear protagonist, suitable references and sufficient detected face size exist. Sample three frames and compare identity and timing; otherwise retain the upscale without FaceRefine.
 3. **Neither is a legal choice.** `none` is always available and is the correct answer when the take is already good, the gain is marginal, or the user declines the time cost.
 4. **Never use enhancement to rescue a take chosen for the wrong reason.** Re-select the take instead.
-5. **The largest-face limitation must be stated to the user.** In a multi-person frame `face_refine` refines only the largest face (default `face_select="largest_face"`); every other face stays as-is. For group shots prefer `seedvr2_upscale`.
+5. **The largest-face limitation must be stated to the user.** In a multi-person frame `face_refine` refines only the largest face (default `face_select="largest_face"`); every other face stays as-is. For group shots prefer `relayvsr_upscale` or `seedvr2_upscale`.
 6. **Time cost is part of the choice.** Show `estimated_seconds` from the menu, state the measured SeedVR2 scale, and allow enhancing only a subset of shots. A 20-second take at SeedVR2 is roughly one hour.
-7. **`face_refine` requires an approved character sheet.** Take exactly **two** reference images from that character's approved reference set: a facial close-up (node 6) and a wardrobe/full-body reference (node 7). If there is no approved character sheet, or no clear protagonist in the shot, **do not offer `face_refine`** — offer `seedvr2_upscale` or `none`. Source-led projects with no character assets default to no FaceRefine.
+7. **`face_refine` requires an approved character sheet.** Take exactly **two** reference images from that character's approved reference set: a facial close-up (node 6) and a wardrobe/full-body reference (node 7). If there is no approved character sheet, or no clear protagonist in the shot, **do not offer `face_refine`** — offer `relayvsr_upscale`, `seedvr2_upscale` or `none`. Source-led projects with no character assets default to no FaceRefine.
 
 ## Gate flow (cinematic `assets.enhancement_selection`)
 
 The gate is defined in `pipeline_defs/cinematic.yaml` (the `assets.enhancement_selection` sub-stage) and `skills/pipelines/cinematic/asset-director.md`. It is `human_approval_default: true`, and it sits after takes are selected and before the final `asset_manifest` export. It applies to **every** cinematic assets run, source-led and narrative alike.
 
 1. **Abilities.** Discover the registry and inspect `comfyui_enhance` (`get_status()`): when the tool status is not `available` (the server is not running or unreachable), pass `server_running=False` to `lib.local_enhancement_readiness.check_enhancement_readiness`. That report makes node-pack, model, version, and server problems known before any menu is shown. Never hide a blocked route.
-2. **Menu.** Call `lib.enhancement_selection.build_menu(registry, readiness, duration_seconds=...)`. Present all three routes in order — `none`, `face_refine`, `seedvr2_upscale` — with `status`, `available`, `reason`, `warnings`, `estimated_seconds`, and `estimate_source`. A blocked route stays visible with its blockers. **Surface every row's `warnings` verbatim** — especially SeedVR2's first-run ~3.16 GB DiT download warning, which is a real part of the time cost the user is approving.
+2. **Menu.** Call `lib.enhancement_selection.build_menu(registry, readiness, duration_seconds=...)`. Present all four routes — `none`, `face_refine`, `seedvr2_upscale`, `relayvsr_upscale` — with `status`, `available`, `reason`, `warnings`, `estimated_seconds`, and `estimate_source`. Recommend RelayVSR for overall upscale when available. A zero RelayVSR estimate means unknown, not instantaneous. A blocked route stays visible with its blockers. **Surface every row's `warnings` verbatim** — especially SeedVR2's first-run ~3.16 GB DiT download warning, which is a real part of the time cost the user is approving.
 3. **Decision.** The user picks one route for the approved shot range. `build_menu` rows are **not** schema-ready `options_considered` items: they use `route_id` and carry extra keys (`status`, `available`, `warnings`, `shared_warnings`, `tool`, `operation`, `estimated_seconds`, `estimate_source`), while `record_selection` requires `option_id`, `label`, `score`, and `reason` per option and the decision schema rejects extras. Map them explicitly before calling:
 
    ```python
@@ -53,7 +54,7 @@ The gate is defined in `pipeline_defs/cinematic.yaml` (the `assets.enhancement_s
    ```
 
    Passing raw menu rows raises `ValueError` (the selectable id is absent). The decision is keyed `(category="enhancement_selection", subject="Post-enhancement route")`, is `user_visible`/`user_approved`, and is **latest-wins**: a re-entry appends a new decision covering the full current range; do not edit or reword the old one. The shot subset belongs in the `reason`/`options_considered` text.
-4. **Qualification (FaceRefine only).** Before running, sample three frames with `frame_sampler` and confirm one main face at the recommended size; show the sampled frames at the gate. Pick the per-shot protagonist, take exactly two approved reference images, and write the full `subject_definitions` prompt from the approved character description plus shot context. If the face is too small, switch the decision to `seedvr2_upscale` or `none`.
+4. **Qualification (FaceRefine only).** Before running, sample three frames with `frame_sampler` and confirm one main face at the recommended size; show the sampled frames at the gate. Pick the per-shot protagonist, take exactly two approved reference images, and write the full `subject_definitions` prompt from the approved character description plus shot context. If the face is too small, switch the decision to `relayvsr_upscale`, `seedvr2_upscale` or `none`.
 5. **Apply.** Call `require_selected_route(decision_log, route_id)` (raises unless the latest approved decision matches), then `comfyui_enhance.execute(...)` per shot with `operation` from the mapping above and an `output_path` under `projects/<project_id>/assets/video/enhanced/<shot_id>-<take_id>-<operation>.mp4`. Do not run any route the user did not approve, and do not run silently.
 6. **Re-export.** Call `NarrativeAssets.apply_enhancement(shot_id, take_id, path, duration_seconds=..., enhancement=...)` so the selected take's `path` becomes the enhanced file (the take id is unchanged, and the original path is preserved as `metadata.original_path`). Then regenerate `asset_manifest` and `edit_decisions`, rewrite the assets and edit checkpoints, and re-request approval. Without the re-export, `video_compose` rejects cuts whose paths no longer match the narrative selection.
 

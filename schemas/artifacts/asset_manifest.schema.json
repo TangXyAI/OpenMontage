@@ -78,7 +78,7 @@
             "type": "object",
             "required": ["operation", "model", "source_path"],
             "properties": {
-              "operation": {"enum": ["face_refine", "video_upscale"]},
+              "operation": {"enum": ["face_refine", "video_upscale", "relayvsr"]},
               "model": {"type": "string"},
               "source_path": {"type": "string"},
               "parameters": {"type": "object"},

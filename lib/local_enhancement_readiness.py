@@ -1,12 +1,13 @@
 """Filesystem-only readiness check for the local post-enhancement routes.
 
-Two enhancement routes run on the same local ComfyUI install:
+Three enhancement routes run on the same local ComfyUI install:
 
 * ``face_refine`` — the ``ComfyUI-H3-FaceRefine`` pack (which also needs
   ``comfyui-videohelpersuite`` for video loading/combining) plus the H3
   checkpoint set, the acceleration LoRA, and a face detector.
 * ``video_upscale`` — the ``seedvr2_videoupscaler`` pack plus the SeedVR2 3B
   DiT and its VAE.
+* ``relayvsr`` — ComfyUI's RelayVSR core nodes plus its diffusion model and VAE.
 
 The agent asks this helper whether an enhancement route can run before it
 offers that route to the user. The check is deliberately offline: it reads
@@ -52,16 +53,20 @@ DEFAULT_MODELS = {
     "detector": "face_yolov8n.pt",
     "seedvr2_dit": "seedvr2_ema_3b_fp8_e4m3fn.safetensors",
     "seedvr2_vae": "ema_vae_fp16.safetensors",
+    "relayvsr_unet": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
+    "relayvsr_vae": "relayvsr_flash_vae_x2_fp32.safetensors",
 }
 
 REQUIRED_NODES = {
     "face_refine": ("ComfyUI-H3-FaceRefine", "comfyui-videohelpersuite"),
     "video_upscale": ("seedvr2_videoupscaler",),
+    "relayvsr": (),
 }
 
 ROUTE_MODELS = {
     "face_refine": ("unet", "clip", "vae_video", "vae_audio", "lora", "detector"),
     "video_upscale": ("seedvr2_dit", "seedvr2_vae"),
+    "relayvsr": ("relayvsr_unet", "relayvsr_vae"),
 }
 
 MODEL_LABELS = {
@@ -73,6 +78,8 @@ MODEL_LABELS = {
     "detector": "face detector",
     "seedvr2_dit": "SeedVR2 3B DiT",
     "seedvr2_vae": "SeedVR2 VAE",
+    "relayvsr_unet": "RelayVSR diffusion model",
+    "relayvsr_vae": "RelayVSR VAE",
 }
 
 
@@ -125,7 +132,7 @@ def check_enhancement_readiness(
     Returns:
         ``{"ready", "server_running", "comfyui_version", "checks", "blockers",
         "warnings", "routes", "ready_routes"}``. ``routes`` maps
-        ``"face_refine"`` and ``"video_upscale"`` to
+        ``"face_refine"``, ``"video_upscale"`` and ``"relayvsr"`` to
         ``{"ready", "blockers", "warnings", "models"}``. A route's ``ready``
         reflects only its nodes and model files, not the server; the top-level
         ``ready`` is true only when the server is running and at least one
@@ -189,6 +196,18 @@ def check_enhancement_readiness(
         route_blockers: list[str] = list(shared_blockers)
         route_warnings: list[str] = []
         route_models: dict[str, str | None] = {}
+
+        if route_name == "relayvsr":
+            source = comfy_root / "comfy_extras" / "nodes_wan.py"
+            try:
+                content = source.read_text(encoding="utf-8")
+                core_ok = "class RelayVSRConditioning" in content and "class VSRDecode" in content
+            except (OSError, UnicodeError):
+                core_ok = False
+            checks["relayvsr.core_nodes"] = {"ok": core_ok, "path": str(source) if source.is_file() else None,
+                                               "detail": "RelayVSR core nodes found" if core_ok else "RelayVSR core nodes not found"}
+            if not core_ok:
+                route_blockers.append(f"RelayVSR core nodes not found in {source}")
 
         for node_pack in node_packs:
             node_path = installed_nodes.get(node_pack.casefold())

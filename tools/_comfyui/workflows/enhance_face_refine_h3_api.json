@@ -41,7 +41,7 @@
       "Y": 0,
       "frame_index": 0,
       "images": [
-        "1",
+        "325",
         0
       ]
     },
@@ -293,7 +293,7 @@
       "undetected_frames": "fade_out",
       "feather_scales_with_crop": false,
       "base_images": [
-        "1",
+        "325",
         0
       ],
       "refined_crops": [
@@ -323,7 +323,7 @@
       "pingpong": false,
       "save_output": true,
       "images": [
-        "22",
+        "326",
         0
       ],
       "audio": [
@@ -382,6 +382,91 @@
     "class_type": "CLIPLoader",
     "_meta": {
       "title": "Text encoder"
+    }
+  },
+  "320": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "expression": "max(1, (5-a) % 17)",
+      "values.a": [
+        "1",
+        1
+      ]
+    }
+  },
+  "321": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "expression": "max(5, a + (5-a) % 17)",
+      "values.a": [
+        "1",
+        1
+      ]
+    }
+  },
+  "322": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "batch_index": -1,
+      "length": 1
+    }
+  },
+  "323": {
+    "class_type": "RepeatImageBatch",
+    "inputs": {
+      "image": [
+        "322",
+        0
+      ],
+      "amount": [
+        "320",
+        1
+      ]
+    }
+  },
+  "324": {
+    "class_type": "ImageBatch",
+    "inputs": {
+      "image1": [
+        "1",
+        0
+      ],
+      "image2": [
+        "323",
+        0
+      ]
+    }
+  },
+  "325": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "image": [
+        "324",
+        0
+      ],
+      "batch_index": 0,
+      "length": [
+        "321",
+        1
+      ]
+    }
+  },
+  "326": {
+    "class_type": "ImageFromBatch",
+    "inputs": {
+      "image": [
+        "22",
+        0
+      ],
+      "batch_index": 0,
+      "length": [
+        "1",
+        1
+      ]
     }
   }
 }

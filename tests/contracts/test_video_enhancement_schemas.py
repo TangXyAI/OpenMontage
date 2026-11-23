@@ -59,6 +59,14 @@ def test_asset_manifest_accepts_enhancement_object():
     }), _schema("asset_manifest"))
 
 
+def test_asset_manifest_accepts_relayvsr_enhancement():
+    jsonschema.validate(_manifest({
+        "operation": "relayvsr",
+        "model": "relayvsr_x2_lightx2v_int8_convrot.safetensors",
+        "source_path": "assets/video/s1-take1.mp4",
+    }), _schema("asset_manifest"))
+
+
 def test_asset_manifest_rejects_unknown_enhancement_key():
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(_manifest({

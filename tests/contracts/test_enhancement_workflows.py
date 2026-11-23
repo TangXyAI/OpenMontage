@@ -39,6 +39,17 @@ def test_seedvr2_workflow_is_clean_api_format():
     assert workflow["23"]["inputs"]["filename_prefix"] == "om_enhance/seedvr2"
 
 
+def test_face_refine_pads_h3_frames_and_trims_to_original_length():
+    workflow = _load("enhance_face_refine_h3_api.json")
+    assert workflow["2"]["inputs"]["images"] == ["325", 0]
+    assert workflow["22"]["inputs"]["base_images"] == ["325", 0]
+    assert workflow["321"]["inputs"]["values.a"] == ["1", 1]
+    assert workflow["326"]["inputs"]["length"] == ["1", 1]
+    assert workflow["326"]["inputs"]["image"] == ["22", 0]
+    assert workflow["23"]["inputs"]["images"] == ["326", 0]
+    assert workflow["23"]["inputs"]["audio"] == ["1", 2]
+
+
 def test_workflows_have_no_machine_specific_paths():
     for name in ("enhance_face_refine_h3_api.json", "enhance_seedvr2_3b_api.json"):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")

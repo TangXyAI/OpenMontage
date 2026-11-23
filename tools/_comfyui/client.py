@@ -313,7 +313,13 @@ class ComfyUIClient:
         """Block until *prompt_id* finishes.  Returns the history entry."""
         deadline = time.time() + timeout
         while time.time() < deadline:
-            entry = self._history_entry(prompt_id)
+            try:
+                entry = self._history_entry(prompt_id)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                # A busy local server may briefly stop answering while it
+                # decodes or stitches a large video. Keep waiting for the
+                # same prompt within the original deadline.
+                entry = None
             if entry is not None:
                 return entry
             time.sleep(interval)
