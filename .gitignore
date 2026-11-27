@@ -119,3 +119,7 @@ gfpgan/
 
 # Hell-Grind prompt corpus index (regenerable, large)
 reference/hell-grind/*.jsonl
+
+# playwright
+.playwright-mcp/
+
