@@ -25,6 +25,7 @@ All five images belong to the same approved character and state. Each is generat
 - `tools/video/comfyui_refmod.py` accepts one `reference_path`, checks it against the approved asset's single `path`, and binds one image input in `refmod_extract_api.json`.
 - `NarrativeAssets` stores a single canonical asset path and RefMod source hash, so it cannot currently detect changes to a multi-image source set.
 - The current extraction workflow already sets `image_refs` to `separate`, but supplies only `refs_image.ref_image_0`.
+- The `projects/yudai-mystery` reference uses `Full Reference` / `identity_encode`, a 1024px short edge, `image_refs="separate"`, and `max_tokens=0` for character bundles. Its five-view character bundles contain five ordered image members and 5,600 tokens; the current 5,120-token cap would reject them.
 
 MiniMax's official H3 documentation describes Ref2VA as accepting reference images, and its hosted v2 API limits each request to nine reference images. RefMod itself is implemented by the community ComfyUI-MiniMaxH3Mod extension, whose documentation describes preserving multiple images as separate members of one version-5 bundle, loaded through one Loader slot. The hosted API image limit is not assumed to be a hard limit on OpenMontage's local RefMod route. OpenMontage will depend on the extension's bundle contract, verify the live node inputs before extraction, and use the RefMod token budget's error policy to avoid partial bundles.
 
@@ -33,6 +34,7 @@ MiniMax's official H3 documentation describes Ref2VA as accepting reference imag
 - Replace the three-panel character reference with the five specified standalone images.
 - Keep the image role and order stable from generation through the RefMod bundle and H3 `<Picture N>` prompt map.
 - Create one `.safetensors` RefMod bundle per approved character/state from all five images.
+- Use the reference project's identity-preserving `Full Reference` / `identity_encode` settings at a 1024px short edge and disable the hard token cap for new five-view character bundles.
 - Record every source image path and hash so a change to any view marks the bundle stale.
 - Keep locations, props, and existing single-image character assets working with one image.
 - Leave already approved three-image character sets and single-image RefMods intact; require the five-view contract only for newly generated or explicitly regenerated character sets.
@@ -55,6 +57,7 @@ MiniMax's official H3 documentation describes Ref2VA as accepting reference imag
 - The five images must use one stable character descriptor, wardrobe/state, visual style, and background treatment.
 - Keep each role explicit in filenames/catalog metadata and in the fixed order above.
 - The current RefMod node is third-party software; only its documented `image_refs="separate"` mode supports the selected bundle behavior.
+- For new five-view characters, set `mode="Full Reference"`, `extraction_preset="identity_encode"`, `ref_resolution=1024`, `max_tokens=0`, `merge=false`, `motion_only=false`, `multiplier=1`, and `image_refs="separate"`. Keep `budget_policy="error"` as the explicit overflow policy if a future workflow re-enables a cap.
 - Existing single-source RefMod records must continue to validate and remain current under their existing rules.
 
 ## Approaches
@@ -79,7 +82,7 @@ The user selected approach 1.
 2. Update the character-sheet validation contract to require exactly five distinct existing image paths. Keep the helper's descriptor check and project path checks.
 3. Record the character's ordered role/path set with its approved asset. Keep a canonical primary path for legacy consumers, and preserve the full set for RefMod extraction.
 4. Extend `comfyui_refmod` to accept the approved ordered set. For a new character set, require the five expected roles and paths to match the catalog. For a location, prop, or legacy single-image asset, continue to use one source image.
-5. Extend the extraction API workflow with one `LoadImage` source per view, bind each source to the matching autogrow input, and keep `image_refs="separate"`. Validate all required live inputs before upload/submission.
+5. Extend the extraction API workflow with one `LoadImage` source per view, bind each source to the matching autogrow input, and keep `image_refs="separate"`. For five-view character sets, use `Full Reference` / `identity_encode` at 1024px and `max_tokens=0` to match the reference project. Validate all required live inputs before upload/submission.
 6. Compute a deterministic source-set digest from the ordered role/path/content hashes. Persist each path and content hash in RefMod provenance. Treat the RefMod as stale if any member changes, is missing, or is reordered. Preserve validation of legacy records that contain a single `source_path` and `source_sha256`.
 7. Update the asset director, narrative consistency guide, and MiniMax H3 skill with the five-view specification and stable role order. Compile global `<Picture N>` labels from the actual ordered reference map for each shot.
 
@@ -88,6 +91,7 @@ The user selected approach 1.
 - A new character asset requires five distinct image paths with the specified roles and order.
 - The reference-generation instructions explicitly require five standalone files and reject a combined sheet.
 - The extraction workflow binds all five inputs to one RefMod extraction with `image_refs="separate"`.
+- Five-view character bundles use `Full Reference` / `identity_encode` at 1024px with `max_tokens=0`, so the reference project's 5,600-token bundle is not rejected by a 5,120-token cap.
 - The resulting project has one RefMod bundle per character/state, and its provenance identifies all five sources in order.
 - Changing, deleting, or reordering any approved source makes the current bundle stale and blocks its use until re-extraction.
 - The selected live ComfyUI node must support the required sockets and `image_refs` mode; an incompatible node blocks before extraction.

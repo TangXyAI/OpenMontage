@@ -45,8 +45,11 @@ current `catalog.refmods_for_shot(shot_id)` rows to `comfyui_video` as
 `refmod_assets`. New character records carry five standalone views in this
 order: shoulder-up front, shoulder-up side, front full-body without head, side
 full-body without head, and back full-body with head. Extract all five in one
-`image_refs="separate"` bundle; locations, props, and legacy single-image assets
-continue to use one `reference_path`. Use every row's `prompt_labels` and
+`image_refs="separate"` bundle with `mode="Full Reference"`,
+`extraction_preset="identity_encode"`, `ref_resolution=1024`, and
+`max_tokens=0`; set `budget_policy="error"` and verify all five members before
+registration. Locations, props, and legacy single-image assets continue to use
+one `reference_path`. Use every row's `prompt_labels` and
 descriptor in the prompt in the same order as the Text Encode reference map.
 Picture numbers are assigned across the active bundle members, so a five-view
 character contributes five labels and later assets start after them. Visual

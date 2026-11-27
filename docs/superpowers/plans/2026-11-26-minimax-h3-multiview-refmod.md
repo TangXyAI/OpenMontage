@@ -19,7 +19,7 @@
 - Extract one RefMod per approved character/state and load it through one Loader slot.
 - Existing single-image assets, already approved three-image character sets, and existing single-source RefMods remain unchanged unless explicitly regenerated. Legacy three-image records with a top-level `reference_images` list continue to use their canonical `path` for RefMod extraction.
 - Record all five source paths and content hashes in order. Any missing, changed, or reordered source makes the bundle stale.
-- Require the live extraction node's `refs_image` IMAGE autogrow prefix and capacity of at least five, `image_refs` option `separate`, and `budget_policy` option `error`; set the visual budget policy to `error` and reject incomplete or out-of-order bundles.
+- Require the live extraction node's `refs_image` IMAGE autogrow prefix and capacity of at least five, `image_refs` option `separate`, `budget_policy` option `error`, and `extraction_preset` option `identity_encode`. New five-view characters use Full Reference at 1024px with `max_tokens=0`.
 - Assign `<Picture N>` from the actual ordered reference map across active bundles. Do not apply the hosted API's nine-image cap as a local RefMod cap without evidence from the selected local graph.
 - Preserve the existing maximum of eight RefMod Loader slots.
 - No new tests are added and no tests are run in this task. Update the existing three-image validator test to the new five-file contract.
@@ -91,8 +91,8 @@
 
 - [x] Update the tool input schema and runtime validation to accept either one legacy path or the exact five approved role/path entries, never both.
 - [x] Add the four `LoadImage` nodes and their ordered RefMod extractor connections; keep `image_refs` set to `separate`.
-- [x] Inspect the live node schema and require a `refs_image` IMAGE autogrow template with prefix `ref_image_` and max at least five. Verify live `image_refs` contains `separate` and `budget_policy` contains `error`; keep the legacy single-image input check unchanged.
-- [x] Set `budget_policy` to `error`; retain the existing token budget value so insufficient capacity fails instead of silently truncating a view.
+- [x] Inspect the live node schema and require a `refs_image` IMAGE autogrow template with prefix `ref_image_` and max at least five. Verify live `image_refs` contains `separate`, `budget_policy` contains `error`, and `extraction_preset` contains `identity_encode`; keep the legacy single-image input check unchanged.
+- [x] For new five-view characters, set `mode=Full Reference`, `extraction_preset=identity_encode`, `ref_resolution=1024`, `identity=0`, `max_tokens=0`, `merge=false`, `motion_only=false`, `multiplier=1`, `image_refs=separate`, and `budget_policy=error`. Keep the existing single-image workflow settings unchanged.
 - [x] Upload and snapshot all five files, verify each staged snapshot hash before and after upload, then recheck every original source hash immediately before submission and after extraction.
 - [x] Verify the saved RefMod metadata contains exactly five image members with the expected ordered `separate ref i/5` member tags before copying or registering it. On mismatch, remove the unregistered output and return an error.
 - [x] Register the ordered source references and aggregate source-set digest. Keep the existing one-image path, cache behavior, and output shape working.

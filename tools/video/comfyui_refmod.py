@@ -279,8 +279,10 @@ def _multi_image_contract_errors(client: ComfyUIClient) -> list[str]:
             errors.append("refs_image slots are not IMAGE inputs")
 
     for field_name, required_value in (
+        ("mode", "Full Reference"),
         ("image_refs", "separate"),
         ("budget_policy", "error"),
+        ("extraction_preset", "identity_encode"),
     ):
         field = input_fields.get(field_name)
         options = (
@@ -298,6 +300,23 @@ def _multi_image_contract_errors(client: ComfyUIClient) -> list[str]:
             or required_value not in options
         ):
             errors.append(f"{field_name} does not support {required_value!r}")
+    for field_name, expected_type, expected_value in (
+        ("ref_resolution", "INT", 1024),
+        ("max_tokens", "INT", 0),
+    ):
+        field = input_fields.get(field_name)
+        bounds = field[1] if isinstance(field, list) and len(field) > 1 and isinstance(field[1], dict) else {}
+        if (
+            not isinstance(field, list)
+            or not field
+            or field[0] != expected_type
+            or not isinstance(bounds.get("min"), (int, float))
+            or not isinstance(bounds.get("max"), (int, float))
+            or not bounds["min"] <= expected_value <= bounds["max"]
+        ):
+            errors.append(
+                f"{field_name} does not support the reference-project value {expected_value}"
+            )
     return errors
 
 
@@ -728,7 +747,18 @@ class ComfyUIRefMod(BaseTool):
             paths["model_library_root"].mkdir(parents=True, exist_ok=True)
             workflow = json.loads(_WORKFLOW.read_text(encoding="utf-8"))
             if has_reference_images:
-                workflow[_REFMOD_NODE_ID]["inputs"]["budget_policy"] = "error"
+                workflow[_REFMOD_NODE_ID]["inputs"].update({
+                    "mode": "Full Reference",
+                    "extraction_preset": "identity_encode",
+                    "ref_resolution": 1024,
+                    "identity": 0,
+                    "max_tokens": 0,
+                    "merge": False,
+                    "motion_only": False,
+                    "multiplier": 1,
+                    "budget_policy": "error",
+                    "image_refs": "separate",
+                })
             else:
                 workflow[_REFMOD_NODE_ID]["inputs"]["budget_policy"] = "truncate"
                 for slot in range(1, len(CHARACTER_REFERENCE_ROLES)):
