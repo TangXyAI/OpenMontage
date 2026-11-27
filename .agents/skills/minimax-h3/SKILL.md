@@ -42,9 +42,16 @@ their current native route. An FL2VA-only project performs no RefMod extraction.
 Extract each approved asset/state with `comfyui_refmod`, keep its
 project copy and loader mapping in `NarrativeAssets`, then pass only the shot's
 current `catalog.refmods_for_shot(shot_id)` rows to `comfyui_video` as
-`refmod_assets`. Use each row's `prompt_label` and descriptor in the prompt in
-the same order as the Text Encode reference map. Visual RefMods use the node's
-numbered `<Picture N>` labels; do not substitute a free-form `<Subject N>` token.
+`refmod_assets`. New character records carry five standalone views in this
+order: shoulder-up front, shoulder-up side, front full-body without head, side
+full-body without head, and back full-body with head. Extract all five in one
+`image_refs="separate"` bundle; locations, props, and legacy single-image assets
+continue to use one `reference_path`. Use every row's `prompt_labels` and
+descriptor in the prompt in the same order as the Text Encode reference map.
+Picture numbers are assigned across the active bundle members, so a five-view
+character contributes five labels and later assets start after them. Visual
+RefMods use the node's numbered `<Picture N>` labels; do not substitute a
+free-form `<Subject N>` token.
 
 RefMods apply only to local H3 `reference_to_video` / Ref2VA graphs. They may be
 used without native still images. The installed Text Encode node does not accept

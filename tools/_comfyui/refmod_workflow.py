@@ -6,6 +6,8 @@ import copy
 import re
 from typing import Any
 
+from lib.narrative_assets import CHARACTER_REFERENCE_ROLES
+
 
 _REF2VA_NODE = "MiniMaxH3ReferenceToVideo"
 _FL2VA_NODE = "MiniMaxH3ImageToVideo"
@@ -78,12 +80,13 @@ def _new_text_encoder(
     }
 
 
-def _validate_refs(refs: list[dict[str, str]]) -> list[dict[str, str]]:
+def _validate_refs(refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(refs, list):
         raise ValueError("refmod_assets must be a list")
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     required = ("asset_id", "loader_name", "concept_type", "state", "description", "prompt_label")
+    next_picture_number = 1
     for index, ref in enumerate(refs, start=1):
         if not isinstance(ref, dict):
             raise ValueError(f"RefMod reference {index} must be an object")
@@ -103,13 +106,65 @@ def _validate_refs(refs: list[dict[str, str]]) -> list[dict[str, str]]:
             part in {".", ".."} for part in loader_name.split("/")
         ):
             raise ValueError(f"Invalid RefMod loader_name for {asset_id!r}")
-        expected_label = f"<Picture {index}>"
-        if ref["prompt_label"] != expected_label:
+        prompt_labels = ref.get("prompt_labels")
+        if prompt_labels is None:
+            prompt_labels = [ref["prompt_label"]]
+        if (
+            not isinstance(prompt_labels, list)
+            or not prompt_labels
+            or any(not isinstance(label, str) for label in prompt_labels)
+        ):
             raise ValueError(
-                f"RefMod prompt_label order mismatch for {asset_id!r}; "
-                f"expected {expected_label}"
+                f"RefMod reference {index} prompt_labels must be a non-empty string list"
             )
-        normalized.append({**ref, "asset_id": asset_id, "loader_name": loader_name})
+        source_references = ref.get("source_references")
+        if source_references is None:
+            if len(prompt_labels) != 1:
+                raise ValueError(
+                    f"RefMod reference {index} has multiple picture labels without source provenance"
+                )
+        else:
+            if (
+                not isinstance(source_references, list)
+                or len(source_references) != len(prompt_labels)
+                or len(source_references) != len(CHARACTER_REFERENCE_ROLES)
+            ):
+                raise ValueError(
+                    f"RefMod reference {index} picture labels must match its five source references"
+                )
+            for source_index, (source, expected_role) in enumerate(
+                zip(source_references, CHARACTER_REFERENCE_ROLES), start=1
+            ):
+                if (
+                    not isinstance(source, dict)
+                    or set(source) != {"role", "path", "source_sha256"}
+                    or source.get("role") != expected_role
+                    or not isinstance(source.get("path"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(source.get("source_sha256", "")))
+                ):
+                    raise ValueError(
+                        f"RefMod reference {index} source {source_index} has invalid ordered provenance"
+                    )
+        expected_labels = [
+            f"<Picture {picture_number}>"
+            for picture_number in range(
+                next_picture_number,
+                next_picture_number + len(prompt_labels),
+            )
+        ]
+        if prompt_labels != expected_labels or ref["prompt_label"] != expected_labels[0]:
+            raise ValueError(
+                f"RefMod prompt label order mismatch for {asset_id!r}; "
+                f"expected {expected_labels}"
+            )
+        normalized.append({
+            **ref,
+            "asset_id": asset_id,
+            "loader_name": loader_name,
+            "prompt_label": expected_labels[0],
+            "prompt_labels": expected_labels,
+        })
+        next_picture_number += len(expected_labels)
     return normalized
 
 
@@ -264,7 +319,11 @@ def build_refmod_workflow(
     encoder = _node(result, encoder_id, _TEXT_ENCODE_NODE)
     loader = _node(result, loader_id, _LOADER_NODE)
     prompt = encoder["inputs"].get("prompt")
-    labels = [ref["prompt_label"] for ref in normalized_refs]
+    labels = [
+        label
+        for ref in normalized_refs
+        for label in ref["prompt_labels"]
+    ]
     positions = [prompt.find(label) if isinstance(prompt, str) else -1 for label in labels]
     if any(position < 0 for position in positions) or positions != sorted(positions):
         raise ValueError(
@@ -275,6 +334,12 @@ def build_refmod_workflow(
         loader["inputs"][f"mod_{slot}"] = "(none)"
         loader["inputs"][f"strength_{slot}"] = 1.0
         loader["inputs"][f"copies_{slot}"] = 1
+        component_key = f"components_{slot}"
+        visual_strength_key = f"visual_strength_{slot}"
+        if component_key in loader["inputs"]:
+            loader["inputs"][component_key] = "Visual"
+        if visual_strength_key in loader["inputs"]:
+            loader["inputs"][visual_strength_key] = 1.0
     for slot, ref in enumerate(normalized_refs, start=1):
         loader["inputs"][f"mod_{slot}"] = ref["loader_name"]
     encoder["inputs"]["mods"] = [loader_id, 0]

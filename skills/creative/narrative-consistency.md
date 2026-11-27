@@ -18,14 +18,19 @@ for the model/route gate that follows asset lock.
 Build and approve assets in this order. Do not start shot generation until every item
 in the chain is locked.
 
-1. **Descriptor text + reference image.** Write a short, stable descriptor for each
-   character, location, and prop, then generate a reference image from it with
-   `lira-image-prompts`. The descriptor is the contract; the image proves it.
-2. **Character sheet** — a three-panel sheet per character:
-   - face close-up,
-   - **front full-body without head** (body, wardrobe, and proportions only; the head is
-     deliberately omitted so the sheet cannot duplicate or contaminate the face),
-   - back full-body.
+1. **Descriptor text + references.** Write a short, stable descriptor for each
+   character, location, and prop, then generate its references from that descriptor
+   with `lira-image-prompts`. The descriptor is the contract; the images prove it.
+2. **Character reference set** — five separate image files per new character/state,
+   in this fixed order. Never make a contact sheet or collage:
+   - shoulder-up front portrait,
+   - shoulder-up side portrait,
+   - **front full-body without head** (body, wardrobe, and proportions only),
+   - **side full-body without head** (body, wardrobe, and proportions only),
+   - back full-body with head.
+   Keep identity, wardrobe/state, lighting, and background consistent. Register
+   each role and path in `NarrativeAssets`; the front portrait is the canonical
+   asset path for legacy consumers.
 3. **Location plate** — a clean empty plate of every location, shot from the master
    angle, before any character enters it.
 4. **Prop sheet** — every recurring hero prop gets its own reference, scale, and
@@ -40,11 +45,12 @@ unselected takes and unlinked reference sheets stay in the catalog.
 
 ## Character sheets
 
-A character sheet is a texture-and-identity document, not one flattering portrait.
+A character reference set is five standalone texture-and-identity images, not one
+composite portrait. The image files must remain independent through review and
+RefMod extraction.
 
-- Generate **separate texture references** for hair, skin, background, and fabric.
-  One all-in-one image averages the details and loses the extremes (flyaway hair,
-  skin pores, weave, grain).
+- Check hair, skin, background, and fabric texture across the five views; do not
+  add extra character images to the five-image RefMod set.
 - Keep the **descriptor word-for-word in every shot prompt**. Paraphrasing — even
   synonyms — is how identity drifts: the model follows the words it is given. Copy the
   approved descriptor verbatim, then add the scene-specific action and framing.

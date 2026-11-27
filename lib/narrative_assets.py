@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
@@ -15,22 +16,58 @@ from typing import Any
 from urllib.parse import quote
 
 
-def validate_character_sheet(descriptor: str, sheet_paths: Sequence[str | Path]) -> None:
-    """Validate the three-image character sheet required before locking an asset.
+CHARACTER_REFERENCE_ROLES = (
+    "portrait_front",
+    "portrait_side",
+    "full_body_front_headless",
+    "full_body_side_headless",
+    "full_body_back_headed",
+)
 
-    Hell-Grind requires a non-empty descriptor and exactly three reference
-    images (face close-up, front full-body without head, back full-body). Only
-    paths are checked; image contents are never read and no catalog state is
-    touched.
+
+def validate_character_sheet(descriptor: str, sheet_paths: Sequence[str | Path]) -> None:
+    """Validate the five separate character references before locking an asset.
+
+    Paths are checked for count, uniqueness, and existence. Image contents are
+    not read here; the asset review gate confirms each file's declared view.
     """
     if not descriptor or not descriptor.strip():
         raise ValueError("Character sheet needs a non-empty descriptor")
     paths = [Path(path) for path in sheet_paths]
-    if len(paths) != 3:
-        raise ValueError(f"Character sheet needs exactly three images, got {len(paths)}")
-    missing = [str(path) for path in paths if not path.is_file()]
+    if len(paths) != len(CHARACTER_REFERENCE_ROLES):
+        raise ValueError(
+            f"Character references need exactly five images, got {len(paths)}"
+        )
+    resolved_paths = [path.resolve() for path in paths]
+    if len(set(resolved_paths)) != len(resolved_paths):
+        raise ValueError("Character references must use five distinct image files")
+    missing = [str(path) for path in resolved_paths if not path.is_file()]
     if missing:
         raise ValueError("Character sheet is missing image files: " + ", ".join(missing))
+
+
+def character_reference_mode(asset: Mapping[str, Any]) -> str:
+    """Classify a character record as single-image, legacy three-image, or v2 five-view."""
+    if not isinstance(asset, Mapping):
+        return "invalid"
+    references = asset.get("reference_images")
+    if references is None:
+        return "single"
+    if not isinstance(references, list):
+        return "invalid"
+    if len(references) == 3:
+        return "legacy_three"
+    if len(references) != len(CHARACTER_REFERENCE_ROLES):
+        return "invalid"
+    for item, expected_role in zip(references, CHARACTER_REFERENCE_ROLES):
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"role", "path"}
+            or item.get("role") != expected_role
+            or not isinstance(item.get("path"), str)
+        ):
+            return "invalid"
+    return "multi_view"
 
 
 class NarrativeAssets:
@@ -86,21 +123,65 @@ class NarrativeAssets:
             os.close(descriptor)
             lock.unlink()
 
-    def put_asset(self, asset_id: str, kind: str, description: str, path: str, *, state: str = "default", metadata: dict | None = None, entity_id: str | None = None) -> None:
+    def put_asset(
+        self,
+        asset_id: str,
+        kind: str,
+        description: str,
+        path: str,
+        *,
+        state: str = "default",
+        metadata: dict | None = None,
+        entity_id: str | None = None,
+        reference_images: Sequence[Mapping[str, str]] | None = None,
+    ) -> None:
         if not asset_id or kind not in {"character", "location", "prop"}:
             raise ValueError("Asset needs an id and kind character, location, or prop")
         if entity_id is not None and not entity_id.strip():
             raise ValueError("Asset entity id cannot be empty")
         if asset_id in self.data["assets"]:
             raise ValueError(f"Asset already exists: {asset_id}")
-        self.data["assets"][asset_id] = {
+        media_path = self._media(path)
+        record = {
             "kind": kind,
             "entity_id": entity_id if entity_id is not None else asset_id,
             "description": description,
-            "path": self._media(path),
+            "path": media_path,
             "state": state,
             "metadata": metadata or {},
         }
+        if reference_images is not None:
+            if kind != "character":
+                raise ValueError("Separate character reference images require a character asset")
+            if not isinstance(reference_images, Sequence) or isinstance(reference_images, (str, bytes)):
+                raise ValueError("Character reference_images must be an ordered list")
+            if len(reference_images) != len(CHARACTER_REFERENCE_ROLES):
+                raise ValueError("A new character reference set needs exactly five images")
+            normalized_references = []
+            for index, (item, expected_role) in enumerate(
+                zip(reference_images, CHARACTER_REFERENCE_ROLES), start=1
+            ):
+                if not isinstance(item, Mapping):
+                    raise ValueError(f"Character reference {index} must be a mapping")
+                if set(item) != {"role", "path"}:
+                    raise ValueError(f"Character reference {index} must contain only role and path")
+                role = item.get("role")
+                reference_path = item.get("path")
+                if role != expected_role:
+                    raise ValueError(
+                        f"Character reference {index} must have role {expected_role!r}"
+                    )
+                if not isinstance(reference_path, str) or not reference_path.strip():
+                    raise ValueError(f"Character reference {index} needs a project-relative path")
+                normalized_path = self._media(reference_path)
+                normalized_references.append({"role": expected_role, "path": normalized_path})
+            reference_paths = [item["path"] for item in normalized_references]
+            if len(set(reference_paths)) != len(reference_paths):
+                raise ValueError("Character references must use five distinct project files")
+            if normalized_references[0]["path"] != media_path:
+                raise ValueError("Character asset path must match its front portrait reference")
+            record["reference_images"] = normalized_references
+        self.data["assets"][asset_id] = record
         self._save()
 
     def register_shot(self, shot_id: str, scene_id: str, *, continuity_contract_version: str | None = None) -> None:
@@ -150,6 +231,7 @@ class NarrativeAssets:
         concept_type: str,
         source_sha256: str,
         extractor: Mapping[str, Any],
+        source_references: Sequence[Mapping[str, str]] | None = None,
     ) -> None:
         """Record a project Mod and the approved visual asset it conditions."""
         asset = self.data["assets"].get(asset_id)
@@ -157,6 +239,13 @@ class NarrativeAssets:
             raise ValueError(f"Unknown RefMod source asset: {asset_id}")
         if asset.get("kind") not in {"character", "location", "prop"}:
             raise ValueError(f"RefMod source asset has an unsupported kind: {asset_id}")
+        reference_mode = character_reference_mode(asset)
+        if reference_mode == "invalid":
+            raise ValueError(f"Character reference set is malformed: {asset_id}")
+        if reference_mode == "multi_view" and source_references is None:
+            raise ValueError("Five-view character RefMods must record all approved source references")
+        if source_references is not None and reference_mode != "multi_view":
+            raise ValueError("Multi-image RefMod provenance requires an approved five-view character asset")
         if not isinstance(concept_type, str) or concept_type not in {"identity", "clothing", "background", "generic", "style"}:
             raise ValueError(f"Unsupported RefMod concept type: {concept_type}")
         if not isinstance(extractor, Mapping):
@@ -198,7 +287,45 @@ class NarrativeAssets:
             )
 
         source_path = self._media(asset["path"])
-        actual_source_sha256 = self._sha256(self.root / source_path)
+        normalized_source_references = None
+        if source_references is not None:
+            approved_references = asset.get("reference_images")
+            if not isinstance(approved_references, list):
+                raise ValueError("Multi-image RefMod sources are not registered on the approved asset")
+            if len(source_references) != len(CHARACTER_REFERENCE_ROLES):
+                raise ValueError("Multi-image RefMod provenance needs exactly five sources")
+            normalized_source_references = []
+            for index, (item, approved, expected_role) in enumerate(
+                zip(source_references, approved_references, CHARACTER_REFERENCE_ROLES), start=1
+            ):
+                if not isinstance(item, Mapping):
+                    raise ValueError(f"RefMod source reference {index} must be a mapping")
+                if set(item) != {"role", "path", "source_sha256"}:
+                    raise ValueError(
+                        f"RefMod source reference {index} must contain role, path, and source_sha256"
+                    )
+                role = item.get("role")
+                reference_path = item.get("path")
+                reference_hash = item.get("source_sha256")
+                if role != expected_role or role != approved.get("role"):
+                    raise ValueError(f"RefMod source reference {index} has an unexpected role")
+                if not isinstance(reference_path, str) or not isinstance(approved.get("path"), str):
+                    raise ValueError(f"RefMod source reference {index} needs a project path")
+                normalized_path = self._media(reference_path)
+                if normalized_path != self._media(approved["path"]):
+                    raise ValueError(f"RefMod source path does not match approved view {role}")
+                if not isinstance(reference_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", reference_hash):
+                    raise ValueError(f"RefMod source reference {index} needs a lowercase SHA-256 digest")
+                if self._sha256(self.root / normalized_path) != reference_hash:
+                    raise ValueError("Approved source changed during RefMod extraction")
+                normalized_source_references.append(
+                    {"role": role, "path": normalized_path, "source_sha256": reference_hash}
+                )
+            if normalized_source_references[0]["path"] != source_path:
+                raise ValueError("RefMod source set must start with the canonical front portrait")
+            actual_source_sha256 = self.source_reference_digest(normalized_source_references)
+        else:
+            actual_source_sha256 = self._sha256(self.root / source_path)
         if actual_source_sha256 != source_sha256:
             raise ValueError("Approved source changed during RefMod extraction")
         mod_path = self._media(project_path)
@@ -220,8 +347,29 @@ class NarrativeAssets:
             "status": "ready",
             "extractor": dict(extractor),
         }
+        if normalized_source_references is not None:
+            record["source_references"] = normalized_source_references
         self.data.setdefault("refmod_assets", {})[asset_id] = record
         self._save()
+
+    @staticmethod
+    def source_reference_digest(source_references: Sequence[Mapping[str, str]]) -> str:
+        """Return a stable digest for an ordered role/path/content-hash set."""
+        canonical = [
+            {
+                "role": item["role"],
+                "path": item["path"],
+                "source_sha256": item["source_sha256"],
+            }
+            for item in source_references
+        ]
+        payload = json.dumps(
+            canonical,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
     def record_refmod_usage(self, mode: str, *, route_id: str, decision_id: str) -> None:
         """Record the approved conditioning mode used for this asset batch."""
@@ -251,6 +399,55 @@ class NarrativeAssets:
         loader_parts = PurePosixPath(
             str(record.get("loader_name", "")).replace("\\", "/")
         ).parts
+        recorded_sources = record.get("source_references")
+        reference_mode = character_reference_mode(asset)
+        if reference_mode == "invalid":
+            return False
+        if (reference_mode == "multi_view") != (recorded_sources is not None):
+            return False
+        if recorded_sources is not None:
+            approved_sources = asset.get("reference_images")
+            if (
+                not isinstance(recorded_sources, list)
+                or not isinstance(approved_sources, list)
+                or len(recorded_sources) != len(CHARACTER_REFERENCE_ROLES)
+                or len(approved_sources) != len(CHARACTER_REFERENCE_ROLES)
+            ):
+                return False
+            normalized_sources = []
+            for index, (recorded, approved, expected_role) in enumerate(
+                zip(recorded_sources, approved_sources, CHARACTER_REFERENCE_ROLES), start=1
+            ):
+                if not isinstance(recorded, Mapping) or not isinstance(approved, Mapping):
+                    return False
+                if (
+                    recorded.get("role") != expected_role
+                    or approved.get("role") != expected_role
+                    or recorded.get("path") != approved.get("path")
+                ):
+                    return False
+                try:
+                    path = self._media(recorded["path"])
+                except (KeyError, TypeError, ValueError):
+                    return False
+                source_hash = recorded.get("source_sha256")
+                if (
+                    not isinstance(source_hash, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", source_hash)
+                    or self._sha256(self.root / path) != source_hash
+                ):
+                    return False
+                normalized_sources.append(
+                    {"role": expected_role, "path": path, "source_sha256": source_hash}
+                )
+            if (
+                normalized_sources[0]["path"] != source_path
+                or self.source_reference_digest(normalized_sources) != record.get("source_sha256")
+            ):
+                return False
+        elif self._sha256(self.root / source_path) != record.get("source_sha256"):
+            return False
+
         return (
             source_path == record.get("source_path")
             and expected_entity_id == record.get("entity_id")
@@ -263,7 +460,6 @@ class NarrativeAssets:
                     and loader_parts[1] == project_id
                 )
             )
-            and self._sha256(self.root / source_path) == record.get("source_sha256")
             and self._sha256(self.root / mod_path) == record.get("refmod_sha256")
         )
 
@@ -337,10 +533,33 @@ class NarrativeAssets:
                 "missing RefMod for linked approved assets in shot "
                 f"{shot_id}: {', '.join(missing_asset_ids)}; extract before batching"
             )
-        return [
-            {**record, "prompt_label": f"<Picture {index}>"}
-            for index, record in enumerate(records, start=1)
-        ]
+        labeled_records = []
+        next_picture_number = 1
+        for record in records:
+            source_references = record.get("source_references")
+            reference_count = (
+                len(source_references)
+                if isinstance(source_references, list)
+                else 1
+            )
+            if reference_count < 1:
+                raise ValueError(
+                    f"RefMod {record['asset_id']} has no active image references"
+                )
+            prompt_labels = [
+                f"<Picture {picture_number}>"
+                for picture_number in range(
+                    next_picture_number,
+                    next_picture_number + reference_count,
+                )
+            ]
+            labeled_records.append({
+                **record,
+                "prompt_label": prompt_labels[0],
+                "prompt_labels": prompt_labels,
+            })
+            next_picture_number += reference_count
+        return labeled_records
 
     def record_continuity_review(self, shot_id: str, take_id: str, review: Mapping[str, Any]) -> None:
         shot = self.data["shots"].get(shot_id)

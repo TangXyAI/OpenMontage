@@ -21,6 +21,22 @@
         "1",
         0
       ],
+      "refs_image.ref_image_1": [
+        "5",
+        0
+      ],
+      "refs_image.ref_image_2": [
+        "6",
+        0
+      ],
+      "refs_image.ref_image_3": [
+        "7",
+        0
+      ],
+      "refs_image.ref_image_4": [
+        "8",
+        0
+      ],
       "background_retention": 0.0,
       "vae": [
         "3",
@@ -39,8 +55,32 @@
       "subfolder": "",
       "description": "",
       "save": true,
-      "budget_policy": "truncate",
+      "budget_policy": "error",
       "image_refs": "separate"
+    }
+  },
+  "5": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "approved_reference.png"
+    }
+  },
+  "6": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "approved_reference.png"
+    }
+  },
+  "7": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "approved_reference.png"
+    }
+  },
+  "8": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "approved_reference.png"
     }
   }
 }

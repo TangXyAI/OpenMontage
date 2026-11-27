@@ -50,17 +50,25 @@ def _catalog_with_selected_shot(root, *, shot_id="s01-sh01", scene_id="s01", tak
     return catalog
 
 
-def test_character_sheet_requires_three_existing_images(tmp_path):
+def test_character_sheet_requires_five_distinct_existing_images(tmp_path):
     paths = []
-    for name in ("face.png", "front.png", "back.png"):
+    for name in (
+        "portrait-front.png",
+        "portrait-side.png",
+        "full-body-front-headless.png",
+        "full-body-side-headless.png",
+        "full-body-back-headed.png",
+    ):
         path = tmp_path / name
         path.write_bytes(b"image")
         paths.append(path)
     validate_character_sheet("Hero, wet, white hair", paths)
-    with pytest.raises(ValueError, match="exactly three"):
-        validate_character_sheet("Hero", paths[:2])
+    with pytest.raises(ValueError, match="exactly five"):
+        validate_character_sheet("Hero", paths[:4])
+    with pytest.raises(ValueError, match="distinct"):
+        validate_character_sheet("Hero", [*paths[:4], paths[0]])
     with pytest.raises(ValueError, match="missing"):
-        validate_character_sheet("Hero", [*paths[:2], tmp_path / "missing.png"])
+        validate_character_sheet("Hero", [*paths[:4], tmp_path / "missing.png"])
     with pytest.raises(ValueError, match="descriptor"):
         validate_character_sheet("", paths)
 

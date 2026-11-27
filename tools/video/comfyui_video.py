@@ -275,18 +275,39 @@ class ComfyUIVideo(BaseTool):
                         "refmod_sha256",
                     ],
                     "properties": {
-                        key: {"type": "string"}
-                        for key in (
-                            "asset_id",
-                            "loader_name",
-                            "concept_type",
-                            "state",
-                            "description",
-                            "prompt_label",
-                            "source_sha256",
-                            "refmod_sha256",
-                            "project_path",
-                        )
+                        **{
+                            key: {"type": "string"}
+                            for key in (
+                                "asset_id",
+                                "loader_name",
+                                "concept_type",
+                                "state",
+                                "description",
+                                "prompt_label",
+                                "source_sha256",
+                                "refmod_sha256",
+                                "project_path",
+                            )
+                        },
+                        "prompt_labels": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                        "source_references": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "object",
+                                "required": ["role", "path", "source_sha256"],
+                                "properties": {
+                                    "role": {"type": "string", "minLength": 1},
+                                    "path": {"type": "string", "minLength": 1},
+                                    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                                },
+                                "additionalProperties": False,
+                            },
+                        },
                     },
                 },
                 "description": (
@@ -1268,8 +1289,10 @@ class ComfyUIVideo(BaseTool):
                     "concept_type",
                     "state",
                     "prompt_label",
+                    "prompt_labels",
                     "source_sha256",
                     "refmod_sha256",
+                    "source_references",
                 )
                 if key in by_id[asset_id]
             }

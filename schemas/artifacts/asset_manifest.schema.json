@@ -51,7 +51,29 @@
                 "state": { "type": "string", "minLength": 1 },
                 "prompt_label": { "type": "string", "pattern": "^<Picture [1-9][0-9]*>$" },
                 "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                "refmod_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                "refmod_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "prompt_labels": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "pattern": "^<Picture [1-9][0-9]*>$" }
+                },
+                "source_references": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": ["role", "path", "source_sha256"],
+                    "properties": {
+                      "role": {
+                        "type": "string",
+                        "enum": ["portrait_front", "portrait_side", "full_body_front_headless", "full_body_side_headless", "full_body_back_headed"]
+                      },
+                      "path": { "type": "string", "minLength": 1 },
+                      "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                    },
+                    "additionalProperties": false
+                  }
+                }
               },
               "additionalProperties": false
             },
@@ -108,6 +130,23 @@
               "loader_name": {"type": "string", "pattern": "^openmontage/[^/]+/.+$"},
               "source_path": {"type": "string", "minLength": 1},
               "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "source_references": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["role", "path", "source_sha256"],
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": ["portrait_front", "portrait_side", "full_body_front_headless", "full_body_side_headless", "full_body_back_headed"]
+                    },
+                    "path": {"type": "string", "minLength": 1},
+                    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                  },
+                  "additionalProperties": false
+                }
+              },
               "refmod_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
               "status": {"type": "string", "enum": ["ready", "stale"]},
               "extractor": {
